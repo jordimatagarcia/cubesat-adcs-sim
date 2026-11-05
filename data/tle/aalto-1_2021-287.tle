@@ -1,0 +1,6 @@
+# Aalto-1 (NORAD 42775), element set epoch 2021-10-14 13:09:39 UTC.
+# The TLE used for the simulations in the thesis (Mata Garcia 2023, §2.1.2).
+# Public data, originally distributed by CelesTrak / Space-Track.
+AALTO-1
+1 42775U 17036L   21287.54837668  .00002763  00000-0  11979-3 0  9997
+2 42775  97.2347 329.5196 0015076 112.6973 247.5860 15.23078293239323

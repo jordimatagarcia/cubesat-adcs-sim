@@ -9,7 +9,11 @@ authors = [
     { name = "Jordi Mata Garcia", email = "157473246+jordimatagarcia@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.4",
+    "pyarrow>=26.0.1",
+    "sgp4>=2.27",
+]
 
 [project.scripts]
 adcssim = "adcssim.cli:main"
@@ -33,11 +37,17 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "PTH"]
+# Maths notation (×, −, θ, …) is used deliberately in docstrings and comments.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["sgp4.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
