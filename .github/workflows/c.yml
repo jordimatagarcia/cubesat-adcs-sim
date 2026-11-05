@@ -1,0 +1,39 @@
+name: c
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        sanitize: ["OFF", "ON"]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: >
+          cmake -S adcs-c -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DADCS_SANITIZE=${{ matrix.sanitize }}
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  static-analysis:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - run: >
+          cppcheck --std=c11 --enable=warning,style,performance,portability
+          --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem
+          -I adcs-c/include adcs-c/src adcs-c/tests

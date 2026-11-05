@@ -1,0 +1,32 @@
+# Local planning notes (personal, not for the public repo)
+PLAN.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+
+# C / CMake
+build/
+build-*/
+compile_commands.json
+
+# Rust
+target/
+
+# Simulation outputs
+runs/
+*.parquet
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,44 @@
+[project]
+name = "adcssim"
+version = "0.0.0"
+description = "CubeSat attitude determination and control simulator: Python simulation and visualization, ADCS in C and Rust"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Jordi Mata Garcia", email = "157473246+jordimatagarcia@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+adcssim = "adcssim.cli:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.3,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "PTH"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
