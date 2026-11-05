@@ -1,0 +1,40 @@
+# Thesis scenario 3a (Mata Garcia 2023, §5.5). Initialisation in eclipse, no bias.
+#
+# Noise levels: the thesis gives σ_AWGN as Simulink noise powers, read here as variances,
+# so σ = √value: magnetometer 1e-12 T² → 1000.0 nT, gyroscope 5e-7 (rad/s)² →
+# 0.0405 °/s, sun sensor 1e-4 → 0.573°.
+#
+# Start time: 4913 s after the TLE epoch: 10 s after eclipse entry, so the run starts in eclipse
+# (it lasts until t ≈ 1690 s).
+
+name = "case_3a"
+description = "Thesis case 3a: Initialisation in eclipse, no bias."
+seed = 1
+
+[time]
+start_offset_s = 4913.0
+duration_s = 2000.0
+dt_dynamics_s = 0.1
+dt_adcs_s = 1.0
+
+[orbit]
+tle = "../data/tle/aalto-1_2021-287.tle"   # the TLE used in the thesis
+
+[initial]
+quaternion = [0.0, 0.0, 0.0, 1.0]
+rate_deg_s = [5.0, 0.0, 2.0]
+
+[sensors.magnetometer]
+noise_std_nT = 1000.0
+quantize = false            # the thesis models white noise only
+
+[sensors.gyroscope]
+noise_std_deg_s = 0.0405
+quantize = false
+
+[sensors.sun]
+noise_std_deg = 0.573
+half_fov_deg = 90.0         # full-sphere coverage, as assumed in the thesis
+
+[adcs]
+backend = "none"

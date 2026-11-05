@@ -12,7 +12,7 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
-from adcssim.frames import quat_normalize, quat_to_dcm, quat_xi
+from adcssim.frames import cross3, quat_normalize, quat_to_dcm, quat_xi
 
 FloatArray = NDArray[np.float64]
 TorqueFn = Callable[[FloatArray, FloatArray], FloatArray]
@@ -24,7 +24,7 @@ def derivatives(
 ) -> tuple[FloatArray, FloatArray]:
     """Time derivatives ``(q̇, ω̇)``."""
     dq = 0.5 * quat_xi(q) @ w
-    dw = inertia_inv @ (torque - np.cross(w, inertia @ w))
+    dw = inertia_inv @ (torque - cross3(w, inertia @ w))
     return dq, dw
 
 

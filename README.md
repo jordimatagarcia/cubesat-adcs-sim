@@ -1,7 +1,7 @@
 # cubesat-adcs-sim
 
-> **Status: work in progress.** The repository is being set up; nothing runs yet beyond the
-> project skeleton.
+> **Status: work in progress.** The simulator runs (open loop, no ADCS yet). Next: the
+> visualization, then the ADCS in C and Rust.
 
 An open-source attitude determination and control system (ADCS) simulator for a 3U CubeSat,
 rebuilt from scratch from my MSc thesis
@@ -22,11 +22,25 @@ CubeSat*](https://aaltodoc.aalto.fi/items/f665d4b5-35c9-4d32-8ee1-40ff1c5f1547)
 - **ADCS in Rust:** the same algorithms behind the same C interface, and a measured
   comparison of the two implementations.
 
+## Running a scenario
+
+The seven test cases of the thesis are in `scenarios/`:
+
+```bash
+uv run adcssim run scenarios/case_1a.toml     # writes runs/case_1a_none_<time>.parquet
+```
+
+Each run logs truth, sensor readings and ADCS outputs at every control period to a Parquet
+file. What the simulator models, how each model was validated, and its assumptions are in
+[docs/simulator.md](docs/simulator.md).
+
 ## Repository layout
 
 | Path | Content |
 |---|---|
 | `src/adcssim/` | Python simulator package |
+| `scenarios/` | Scenario files (TOML), including the thesis test cases |
+| `data/tle/` | Orbit element sets used by the scenarios |
 | `adcs-c/` | ADCS library in C (CMake) |
 | `adcs-rs/` | ADCS library in Rust (Cargo workspace) |
 | `docs/` | Conventions, maths notes and results |

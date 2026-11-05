@@ -1,0 +1,40 @@
+# Thesis scenario 1a (Mata Garcia 2023, §5.5). Slow tumbling, no bias.
+#
+# Noise levels: the thesis gives σ_AWGN as Simulink noise powers, read here as variances,
+# so σ = √value: magnetometer 1e-12 T² → 1000.0 nT, gyroscope 5e-7 (rad/s)² →
+# 0.0405 °/s, sun sensor 1e-4 → 0.573°.
+#
+# Start time: 3816 s after the TLE epoch, so the eclipse starts at t = 1087 s as in the thesis. With this
+# date the eclipse lasts ~1700 s (thesis: 1167 s; its start date isn't given).
+
+name = "case_1a"
+description = "Thesis case 1a: Slow tumbling, no bias."
+seed = 1
+
+[time]
+start_offset_s = 3816.0
+duration_s = 3000.0
+dt_dynamics_s = 0.1
+dt_adcs_s = 1.0
+
+[orbit]
+tle = "../data/tle/aalto-1_2021-287.tle"   # the TLE used in the thesis
+
+[initial]
+quaternion = [0.0, 0.0, 0.0, 1.0]
+rate_deg_s = [3.0, 5.0, -4.0]
+
+[sensors.magnetometer]
+noise_std_nT = 1000.0
+quantize = false            # the thesis models white noise only
+
+[sensors.gyroscope]
+noise_std_deg_s = 0.0405
+quantize = false
+
+[sensors.sun]
+noise_std_deg = 0.573
+half_fov_deg = 90.0         # full-sphere coverage, as assumed in the thesis
+
+[adcs]
+backend = "none"

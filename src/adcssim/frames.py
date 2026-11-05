@@ -43,6 +43,17 @@ def skew(v: ArrayLike) -> FloatArray:
     return np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
 
 
+def cross3(a: FloatArray, b: FloatArray) -> FloatArray:
+    """Cross product of two single 3-vectors.
+
+    Same result as ``np.cross`` for shape ``(3,)``, but about 20 times faster, which matters in
+    the dynamics loop where it runs several times per RK4 stage.
+    """
+    a1, a2, a3 = float(a[0]), float(a[1]), float(a[2])
+    b1, b2, b3 = float(b[0]), float(b[1]), float(b[2])
+    return np.array([a2 * b3 - a3 * b2, a3 * b1 - a1 * b3, a1 * b2 - a2 * b1])
+
+
 def unit(v: ArrayLike) -> FloatArray:
     """Vector(s) scaled to unit length along the last axis."""
     a = _f64(v)

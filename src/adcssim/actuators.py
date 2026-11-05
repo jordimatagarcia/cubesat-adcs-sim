@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from adcssim.frames import cross3
+
 FloatArray = NDArray[np.float64]
 
 FS1_MAX_DIPOLE = (0.13, 0.13, 0.082)
@@ -51,4 +53,4 @@ class Magnetorquers:
 
 def magnetic_torque(m_b: FloatArray, b_b: FloatArray) -> FloatArray:
     """``τ = m × B`` (thesis eq. 94)."""
-    return np.asarray(np.cross(m_b, b_b))
+    return cross3(m_b, b_b)

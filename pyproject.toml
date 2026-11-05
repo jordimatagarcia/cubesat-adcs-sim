@@ -10,9 +10,9 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=2.5.4",
-    "pyarrow>=26.0.1",
-    "sgp4>=2.27",
+    "numpy>=2.0",
+    "pyarrow>=16.0",
+    "sgp4>=2.23",
 ]
 
 [project.scripts]
@@ -46,7 +46,7 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sgp4.*"]
+module = ["sgp4.*", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

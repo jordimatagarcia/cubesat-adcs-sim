@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from adcssim.environment import AU, SOLAR_PRESSURE_1AU
+from adcssim.frames import cross3
 from adcssim.orbit import MU_EARTH_WGS72
 from adcssim.spacecraft import Spacecraft
 
@@ -19,12 +20,12 @@ FloatArray = NDArray[np.float64]
 def gravity_gradient(r_b: FloatArray, inertia: FloatArray) -> FloatArray:
     """``τ = 3μ/|r|⁵ · r × (J r)`` with ``r`` the position vector in the body frame."""
     rn = float(np.linalg.norm(r_b))
-    return np.asarray(3.0 * MU_EARTH_WGS72 / rn**5 * np.cross(r_b, inertia @ r_b))
+    return 3.0 * MU_EARTH_WGS72 / rn**5 * cross3(r_b, inertia @ r_b)
 
 
 def residual_dipole(m_b: FloatArray, b_b: FloatArray) -> FloatArray:
     """Torque of a magnetic dipole ``m`` (A·m²) in the field ``B`` (T): ``τ = m × B``."""
-    return np.asarray(np.cross(m_b, b_b))
+    return cross3(m_b, b_b)
 
 
 def aerodynamic(sc: Spacecraft, v_rel_b: FloatArray, density: float) -> FloatArray:
@@ -34,7 +35,7 @@ def aerodynamic(sc: Spacecraft, v_rel_b: FloatArray, density: float) -> FloatArr
         return np.zeros(3)
     area = sc.projected_area(v_rel_b / speed)
     force = -0.5 * density * sc.drag_coefficient * area * speed * v_rel_b
-    return np.asarray(np.cross(sc.centre_of_pressure, force))
+    return cross3(sc.centre_of_pressure, force)
 
 
 def solar_pressure(
@@ -45,7 +46,7 @@ def solar_pressure(
         return np.zeros(3)
     pressure = SOLAR_PRESSURE_1AU * (AU / sun_distance) ** 2
     force = -pressure * sc.reflectivity_coefficient * sc.projected_area(sun_b) * sun_b
-    return np.asarray(np.cross(sc.centre_of_pressure, force))
+    return cross3(sc.centre_of_pressure, force)
 
 
 @dataclass(frozen=True)
