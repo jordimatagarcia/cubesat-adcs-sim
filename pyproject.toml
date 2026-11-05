@@ -18,12 +18,22 @@ dependencies = [
 [project.scripts]
 adcssim = "adcssim.cli:main"
 
+[project.optional-dependencies]
+viz = [
+    "pillow>=10.0",
+    "pyqtgraph>=0.13.7",
+    "pyside6>=6.7",
+    "pyvista>=0.44",
+    "pyvistaqt>=0.11",
+]
+
 [dependency-groups]
 dev = [
     "hypothesis",
     "mypy",
     "pre-commit",
     "pytest",
+    "pytest-qt>=4.5.0",
     "ruff",
 ]
 
@@ -46,8 +56,14 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sgp4.*", "pyarrow.*"]
+module = ["sgp4.*", "pyarrow.*", "pyqtgraph.*", "pyvistaqt.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# GUI code: the Qt/VTK libraries are only partly typed.
+module = ["adcssim.viz.*"]
+disallow_untyped_calls = false
+warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

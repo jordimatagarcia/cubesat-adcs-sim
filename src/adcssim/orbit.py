@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -72,14 +73,28 @@ class Tle:
 
 
 class Orbit:
-    """SGP4 propagator for one satellite."""
+    """SGP4 propagator for one satellite.
 
-    def __init__(self, satrec: Satrec) -> None:
+    Picklable (so a simulation can run in another process): it remembers how it was built and
+    rebuilds the propagator, which itself can't be pickled.
+    """
+
+    def __init__(self, satrec: Satrec, source: tuple[Any, ...] | None = None) -> None:
         self._sat = satrec
+        self._source = source
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        if self._source is None:
+            raise TypeError("this Orbit was built from a raw Satrec and can't be pickled")
+        kind, *args = self._source
+        if kind == "tle":
+            return (_orbit_from_tle_lines, tuple(args))
+        return (_orbit_from_elements, tuple(args))
 
     @classmethod
     def from_tle(cls, tle: Tle) -> "Orbit":
-        return cls(Satrec.twoline2rv(tle.line1, tle.line2, WGS72))
+        sat = Satrec.twoline2rv(tle.line1, tle.line2, WGS72)
+        return cls(sat, ("tle", tle.line1, tle.line2, tle.name))
 
     @classmethod
     def from_elements(
@@ -102,6 +117,17 @@ class Orbit:
         a = R_EARTH_WGS72 + altitude_m
         n_rad_min = math.sqrt(MU_EARTH_WGS72 / a**3) * 60.0
         jd, fr = julian_date(epoch)
+        source = (
+            "elements",
+            epoch,
+            altitude_m,
+            inclination_deg,
+            raan_deg,
+            eccentricity,
+            arg_perigee_deg,
+            mean_anomaly_deg,
+            bstar,
+        )
         sat = Satrec()
         sat.sgp4init(
             WGS72,
@@ -118,7 +144,7 @@ class Orbit:
             n_rad_min,
             math.radians(raan_deg),
         )
-        return cls(sat)
+        return cls(sat, source)
 
     @property
     def epoch(self) -> datetime:
@@ -158,3 +184,11 @@ class Orbit:
         jd, fr = clock.jd(t)
         r, _ = self.states(jd, fr)
         return t, r
+
+
+def _orbit_from_tle_lines(line1: str, line2: str, name: str) -> Orbit:
+    return Orbit.from_tle(Tle(line1, line2, name))
+
+
+def _orbit_from_elements(*args: Any) -> Orbit:
+    return Orbit.from_elements(*args)

@@ -20,7 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --locked
+      - uses: pyvista/setup-headless-display-action@v4
+        with:
+          qt: true
+      - run: uv sync --locked --extra viz
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run mypy

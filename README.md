@@ -1,7 +1,9 @@
 # cubesat-adcs-sim
 
-> **Status: work in progress.** The simulator runs (open loop, no ADCS yet). Next: the
-> visualization, then the ADCS in C and Rust.
+> **Status: work in progress.** The simulator and the visualization run (open loop, no ADCS
+> yet). Next: the ADCS in C, then in Rust.
+
+![Viewer: thesis case 1a at 300× speed, entering eclipse](docs/images/viewer.gif)
 
 An open-source attitude determination and control system (ADCS) simulator for a 3U CubeSat,
 rebuilt from scratch from my MSc thesis
@@ -31,7 +33,20 @@ uv run adcssim run scenarios/case_1a.toml     # writes runs/case_1a_none_<time>.
 ```
 
 Each run logs truth, sensor readings and ADCS outputs at every control period to a Parquet
-file. What the simulator models, how each model was validated, and its assumptions are in
+file.
+
+## Visualization
+
+```bash
+uv sync --extra viz
+uv run adcssim view scenarios/case_1a.toml                 # live simulation
+uv run adcssim view runs/case_1a_none_<time>.parquet       # replay a log, with seeking
+```
+
+The viewer shows the satellite over a rotating, Sun-lit Earth with its past and predicted
+orbit, the ground track with the day/night terminator, and live sensor readings (optionally
+against the truth). It can record the window to a GIF. The simulation runs in its own
+process, so the UI stays at ~20 fps at any playback speed (up to ~270× real time). What the simulator models, how each model was validated, and its assumptions are in
 [docs/simulator.md](docs/simulator.md).
 
 ## Repository layout

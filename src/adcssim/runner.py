@@ -249,14 +249,18 @@ class Simulation:
         return recorder.finish(self.metadata())
 
     def metadata(self) -> dict[str, str]:
-        sc = self.scenario
-        return {
-            "adcssim_version": __version__,
-            "scenario_name": sc.name,
-            "scenario_toml": sc.source,
-            "backend": self.backend.name,
-            "seed": str(sc.seed),
-            "start_utc": sc.start.isoformat(),
-            "dt_adcs_s": repr(sc.dt_adcs_s),
-            "dt_dynamics_s": repr(sc.dt_dynamics_s),
-        }
+        return run_metadata(self.scenario, self.backend.name)
+
+
+def run_metadata(sc: Scenario, backend_name: str) -> dict[str, str]:
+    """Metadata stored with a run's telemetry."""
+    return {
+        "adcssim_version": __version__,
+        "scenario_name": sc.name,
+        "scenario_toml": sc.source,
+        "backend": backend_name,
+        "seed": str(sc.seed),
+        "start_utc": sc.start.isoformat(),
+        "dt_adcs_s": repr(sc.dt_adcs_s),
+        "dt_dynamics_s": repr(sc.dt_dynamics_s),
+    }

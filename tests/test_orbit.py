@@ -89,3 +89,16 @@ def test_decayed_orbit_raises() -> None:
     orbit = Orbit.from_elements(epoch, -100e3, inclination_deg=50.0, raan_deg=0.0)
     with pytest.raises(OrbitError):
         orbit.state(*julian_date(epoch))
+
+
+@pytest.mark.parametrize("kind", ["tle", "elements"])
+def test_orbit_survives_pickling(kind: str, aalto1_tle_path: Path) -> None:
+    import pickle
+
+    if kind == "tle":
+        orbit = Orbit.from_tle(Tle.from_file(aalto1_tle_path))
+    else:
+        orbit = Orbit.from_elements(datetime(2021, 1, 1, tzinfo=UTC), 500e3, 97.4, 10.0)
+    clone = pickle.loads(pickle.dumps(orbit))
+    jd, fr = julian_date(orbit.epoch)
+    np.testing.assert_array_equal(clone.state(jd, fr + 0.3)[0], orbit.state(jd, fr + 0.3)[0])

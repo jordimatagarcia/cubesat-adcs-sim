@@ -35,6 +35,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=Path("runs"), help="output directory (default: runs/)"
     )
     run.add_argument("--quiet", action="store_true", help="no progress output")
+
+    view = sub.add_parser(
+        "view", help="open the visualization: a scenario (live) or a .parquet log (replay)"
+    )
+    view.add_argument("path", type=Path, help="scenario file (.toml) or telemetry log (.parquet)")
+    view.add_argument("--backend", help="ADCS backend for a live scenario (e.g. none)")
+    view.add_argument(
+        "--speed", type=float, default=60.0, help="simulated seconds per second (default: 60)"
+    )
+    view.add_argument("--paused", action="store_true", help="start paused")
     return parser
 
 
@@ -85,10 +95,32 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _view(args: argparse.Namespace) -> int:
+    try:
+        from adcssim.viz.app import run_viewer
+    except ImportError as exc:
+        print(
+            f"error: the viewer needs the optional 'viz' dependencies ({exc.name} is missing).\n"
+            "Install them with:  uv sync --extra viz",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.path.exists():
+        print(f"error: {args.path} does not exist", file=sys.stderr)
+        return 2
+    try:
+        return run_viewer(args.path, args.backend, args.speed, autoplay=not args.paused)
+    except (ScenarioError, ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
+    if args.command == "view":
+        return _view(args)
     parser.print_help()
     return 0
