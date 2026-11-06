@@ -76,10 +76,15 @@ uv run adcssim view runs/case_1a_none_<time>.parquet       # replay a log, with 
 ```
 
 The viewer shows the satellite over a rotating, Sun-lit Earth with its past and predicted
-orbit, the ground track with the day/night terminator, and live sensor readings (optionally
-against the truth). It can record the window to a GIF. The simulation runs in its own
+orbit (and the estimated attitude as a ghost), the ground track with the day/night
+terminator, and live sensor readings (optionally against the truth). The ADCS tab shows what
+the ADCS corrects: the magnetometer and gyro biases it estimates and removes from the
+readings against the true ones, the attitude error against the filter's own 3σ bound, the
+dipole commands and the mode. It can record the window to a GIF. The simulation runs in its own
 process, so the UI stays at ~20 fps at any playback speed (up to ~270× real time). What the simulator models, how each model was validated, and its assumptions are in
 [docs/simulator.md](docs/simulator.md).
+
+![ADCS tab: the C library (MEKF) estimating a magnetometer bias step in thesis case 2b](docs/images/adcs_tab.png)
 
 ## Repository layout
 

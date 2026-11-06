@@ -1,5 +1,6 @@
 """Visualization: data plumbing (no display needed) and a GUI smoke test (needs a display)."""
 
+import dataclasses
 import math
 import os
 import sys
@@ -174,6 +175,30 @@ def test_window_replay_seek(qtbot: Any, telemetry: Telemetry) -> None:
     window._seek_to_slider()
     assert window.history.latest("t") == 90.0
     assert "T+00:01:30" in window.time_label.text()
+    window.close()
+
+
+@needs_display
+def test_adcs_tab_shows_estimates_and_biases(qtbot: Any) -> None:
+    from adcssim.viz.app import MainWindow
+
+    sc = dataclasses.replace(scenario(60.0), backend="python-ref")
+    window = MainWindow(ReplaySource(Simulation(sc).run()), "python-ref")
+    qtbot.addWidget(window)
+    window.show()
+    window.tabs.setCurrentWidget(window.adcs)
+    assert window.slider is not None
+    window.slider.setValue(50)
+    window._seek_to_slider()
+    panel = window.adcs
+    assert "ESTIMATE" in panel.labels["state"].text()
+    assert "3σ" in panel.labels["att"].text()
+    t, err = panel.err_curve.getData()
+    assert t is not None and len(t) == 51 and np.nanmax(err) < 5.0
+    t, bound = panel.err_bound.getData()
+    assert np.all(np.isfinite(bound[-10:])) and np.all(bound[-10:] > 0.0)
+    _, gyro_bias = panel.gyro_est[2].getData()
+    assert np.all(np.isfinite(gyro_bias[-10:]))
     window.close()
 
 

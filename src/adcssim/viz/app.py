@@ -74,6 +74,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.sensors, "Sensors")
         tabs.addTab(self.adcs, "ADCS")
         tabs.addTab(self.info, "Scenario")
+        # Only the visible tab's plots are updated: plotting is the viewer's main cost.
+        tabs.currentChanged.connect(lambda _: self.refresh(force_plots=True))
+        self.tabs = tabs
 
         main = QSplitter(Qt.Orientation.Horizontal)
         main.addWidget(left)
@@ -222,8 +225,10 @@ class MainWindow(QMainWindow):
                 h.latest("sun_i"),
                 float(h.latest("gmst")),
             )
-            self.sensors.update_plots(h, self.dt)
-            self.adcs.refresh(h, self.backend, self.sensors.window_s, self.dt)
+            if self.tabs.currentWidget() is self.sensors:
+                self.sensors.update_plots(h, self.dt)
+            elif self.tabs.currentWidget() is self.adcs:
+                self.adcs.refresh(h, self.backend, self.sensors.window_s, self.dt)
         if self.recorder is not None and self._ticks % RECORD_EVERY == 0:
             self.recorder.capture()
 
