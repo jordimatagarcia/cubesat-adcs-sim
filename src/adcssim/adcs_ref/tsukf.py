@@ -73,6 +73,19 @@ class UtWeights:
         )
 
 
+@dataclass(frozen=True)
+class UpdateDiagnostics:
+    """Quantities of the last measurement update, kept for analysis only."""
+
+    innovation: FloatArray
+    """y − ŷ (bias-filter prediction), with NaN for unavailable measurements."""
+    innovation_cov: FloatArray
+    """P_y, the predicted innovation covariance."""
+    bias_gain: FloatArray
+    """K_b, the bias filter's gain (n_b × n_y)."""
+    available: NDArray[np.bool_]
+
+
 @dataclass
 class TsukfState:
     x: FloatArray
@@ -99,6 +112,7 @@ class TwoStageUkf:
         self.weights = UtWeights.thesis(alpha, self.nx)
         self.state: TsukfState | None = None
         self._initial: tuple[FloatArray, FloatArray] | None = None
+        self.last_update: UpdateDiagnostics | None = None
 
     def reset(self, x0: FloatArray, px0: FloatArray, b0: FloatArray, pb0: FloatArray) -> None:
         self.state = TsukfState(
@@ -204,6 +218,12 @@ class TwoStageUkf:
         p_y = py_t + h_mat @ pb_pred @ h_mat.T
         k_b = np.linalg.solve(p_y.T, p_by.T).T
         b_upd = b_pred + k_b @ (y_eff - y_b)
+        self.last_update = UpdateDiagnostics(
+            innovation=np.where(available, y_eff - y_b, np.nan),
+            innovation_cov=p_y,
+            bias_gain=k_b,
+            available=available.copy(),
+        )
         pb_upd = _sym(pb_pred - k_b @ p_y @ k_b.T)
 
         # ---- coupled result (eqs. 67–68) ---------------------------------------------

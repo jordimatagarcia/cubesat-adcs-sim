@@ -25,7 +25,7 @@ from adcssim.environment import Environment, EnvironmentSample
 from adcssim.frames import quat_angle, quat_to_dcm
 from adcssim.igrf import Igrf
 from adcssim.scenario import Scenario
-from adcssim.telemetry import Telemetry, TelemetryRecorder
+from adcssim.telemetry import DIAGNOSTICS, SCHEMA, Telemetry, TelemetryRecorder
 from adcssim.timebase import Clock
 
 FloatArray = NDArray[np.float64]
@@ -102,7 +102,16 @@ class Frame:
             "tau_control": self.tau_control,
             "tau_disturbance": self.tau_disturbance,
             "attitude_error": self.attitude_error,
+            **self._diagnostics(),
         }
+
+    def _diagnostics(self) -> dict[str, object]:
+        diag = self.adcs_out.diag or {}
+        out: dict[str, object] = {}
+        for name in DIAGNOSTICS:
+            width = SCHEMA[name][0]
+            out[name] = diag.get(name, np.nan if width == 1 else np.full(width, np.nan))
+        return out
 
 
 class Simulation:

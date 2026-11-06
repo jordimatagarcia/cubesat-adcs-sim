@@ -40,8 +40,14 @@ def _groups(groups: tuple[int, ...], *values: float) -> FloatArray:
     return np.repeat(np.array(values), groups)
 
 
+VARIANTS = ("thesis",)
+"""``thesis``: the algorithm as reproduced from the thesis (docs/adcs.md), frozen together
+with its golden vectors and results report. An improved variant is added next to it."""
+
+
 @dataclass(frozen=True)
 class AdcsConfig:
+    variant: str = "thesis"
     # FLAE
     flae_weight_sun: float = 1.0
     flae_weight_mag: float = 1.0
@@ -66,6 +72,8 @@ class AdcsConfig:
     settle_time: float = 60.0
 
     def __post_init__(self) -> None:
+        if self.variant not in VARIANTS:
+            raise ValueError(f"unknown ADCS variant {self.variant!r} ({', '.join(VARIANTS)})")
         for name, groups in (
             ("p_x0", STATE_GROUPS),
             ("w_x", STATE_GROUPS),

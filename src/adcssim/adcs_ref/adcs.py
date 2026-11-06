@@ -171,6 +171,8 @@ class ReferenceAdcs:
             return AdcsOutput(status=int(AdcsStatus.NOT_INITIALISED))
         cfg = self.config
         status = AdcsStatus.OK
+        self._diag_flae: tuple[FloatArray, float] | None = None
+        self.filter.last_update = None
 
         # Sensor readings and on-board reference models are checked separately: in eclipse
         # the sun sensor has no reading but the ephemeris still gives the Sun direction.
@@ -211,6 +213,7 @@ class ReferenceAdcs:
             if res.ok:
                 q_meas = res.q
                 self.last_flae_q = res.q
+                self._diag_flae = (res.q, res.lambda_max)
             else:
                 status |= AdcsStatus.FLAE_FAILED
         else:
@@ -297,12 +300,35 @@ class ReferenceAdcs:
         self.m_prev = m
         return self._output(status, mode, m)
 
+    def _diagnostics(self) -> dict[str, FloatArray]:
+        """Analysis data for this step: FLAE result and innovation statistics."""
+        nan4 = np.full(4, np.nan)
+        flae = getattr(self, "_diag_flae", None)
+        d: dict[str, FloatArray] = {
+            "q_flae": flae[0] if flae is not None else nan4,
+            "flae_lambda": np.array(flae[1] if flae is not None else np.nan),
+            "innov": np.full(NX, np.nan),
+            "nis": np.full(4, np.nan),
+            "bias_gain": np.full(NB, np.nan),
+        }
+        upd = self.filter.last_update if self.filter is not None else None
+        if upd is not None:
+            d["innov"] = upd.innovation
+            nis = np.full(4, np.nan)
+            for g, rows in enumerate((Q, SUN, MAG, W)):
+                if upd.available[rows].all():
+                    e = upd.innovation[rows]
+                    nis[g] = float(e @ np.linalg.solve(upd.innovation_cov[rows, rows], e))
+            d["nis"] = nis
+            d["bias_gain"] = np.linalg.norm(upd.bias_gain, axis=1)
+        return d
+
     def _output(
         self, status: AdcsStatus, mode: AdcsMode, m: FloatArray | None = None
     ) -> AdcsOutput:
         s = self.filter.state if self.filter is not None and self.initialised else None
         if s is None:
-            return AdcsOutput(mode=mode, status=int(status))
+            return AdcsOutput(mode=mode, status=int(status), diag=self._diagnostics())
         return AdcsOutput(
             q_est=s.x[Q].copy(),
             w_est=s.x[W].copy(),
@@ -312,4 +338,5 @@ class ReferenceAdcs:
             m_cmd=np.zeros(3) if m is None else m,
             mode=mode,
             status=int(status),
+            diag=self._diagnostics(),
         )

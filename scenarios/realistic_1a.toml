@@ -1,0 +1,46 @@
+# Case 1a with realistic sensors, over two orbits (two eclipses).
+#
+# Same orbit, start time, attitude and tumble as thesis case 1a, but with sensor noise at
+# datasheet level instead of the thesis's near-ideal values, and a constant gyro bias:
+#   magnetometer  300 nT noise          (LIS3MDL, ±4 gauss range: ~3.2 mgauss RMS)
+#   gyroscope     0.03 °/s noise        (L3GD20H: 0.011 °/s/√Hz over a ~7 Hz bandwidth)
+#                 bias [0.05, −0.08, 0.02] °/s
+#   sun sensor    0.3° angular noise, full-sphere coverage (to isolate the eclipse effect)
+# Quantisation is off: the ±2000 °/s gyro range's 0.07 °/s step would dominate the noise.
+# The filter's measurement noise V is set to these sensors; everything else is the thesis
+# tuning.
+
+name = "realistic_1a"
+description = "Case 1a geometry with datasheet-level sensor noise and gyro bias, two orbits"
+seed = 1
+
+[time]
+start_offset_s = 3816.0
+duration_s = 11400.0
+dt_dynamics_s = 0.1
+dt_adcs_s = 0.1
+
+[orbit]
+tle = "../data/tle/aalto-1_2021-287.tle"
+
+[initial]
+quaternion = [0.395545146, -0.791090293, 0.197772573, 0.422618262]
+rate_deg_s = [3.0, 5.0, -4.0]
+
+[sensors.magnetometer]
+noise_std_nT = 300.0
+quantize = false
+
+[sensors.gyroscope]
+noise_std_deg_s = 0.03
+bias_deg_s = [0.05, -0.08, 0.02]
+quantize = false
+
+[sensors.sun]
+noise_std_deg = 0.3
+half_fov_deg = 90.0
+
+[adcs]
+backend = "python-ref"
+# q from FLAE, sun (rad²), B (µT²), ω ((rad/s)²): matched to the noise above
+v = [1e-4, 2.7e-5, 0.09, 2.7e-7]

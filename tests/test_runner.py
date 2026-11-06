@@ -207,3 +207,16 @@ def test_telemetry_round_trip(tmp_path: Path) -> None:
     assert back.get("q_true").shape == (5, 4)
     assert back.get("eclipse").dtype == np.bool_
     assert math.isclose(float(back.get("t")[-1]), 4.0)
+
+
+def test_diagnostic_columns_are_nan_without_a_reference_backend() -> None:
+    tel = Simulation(scenario(time={"duration_s": 3.0})).run()
+    assert np.all(np.isnan(tel.get("nis"))) and tel.get("innov").shape == (3, 13)
+
+
+def test_old_logs_without_new_fields_read_as_nan(tmp_path: Path) -> None:
+    tel = Simulation(scenario(time={"duration_s": 3.0})).run()
+    cols = {k: v for k, v in tel.columns.items() if not k.startswith("nis")}
+    old = Telemetry(cols, tel.metadata)
+    assert not old.has("nis")
+    assert old.get("nis").shape == (3, 4) and np.all(np.isnan(old.get("nis")))

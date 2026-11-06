@@ -58,18 +58,27 @@ SCHEMA: dict[str, tuple[int, type]] = {
     "tau_control": (3, np.float64),
     "tau_disturbance": (3, np.float64),
     "attitude_error": (1, np.float64),
+    # Diagnostics from the reference ADCS (NaN for backends that don't provide them)
+    "q_flae": (4, np.float64),
+    "flae_lambda": (1, np.float64),
+    "innov": (13, np.float64),
+    "nis": (4, np.float64),
+    "bias_gain": (6, np.float64),
 }
+DIAGNOSTICS = ("q_flae", "flae_lambda", "innov", "nis", "bias_gain")
+"""Fields filled from ``AdcsOutput.diag``. ``nis`` is the normalised innovation squared of
+the q, sun, B and ω measurement groups (expected value = 4, 3, 3, 3 for a consistent
+filter); ``bias_gain`` is the row norm of the bias filter's gain per bias state."""
 
-_SUFFIXES = {
-    3: ("x", "y", "z"),
-    4: ("1", "2", "3", "4"),
-    19: tuple(str(i) for i in range(19)),
-}
+_SUFFIXES = {3: ("x", "y", "z"), 4: ("1", "2", "3", "4")}
 
 
 def column_names(name: str) -> list[str]:
     width = SCHEMA[name][0]
-    return [name] if width == 1 else [f"{name}_{s}" for s in _SUFFIXES[width]]
+    if width == 1:
+        return [name]
+    suffixes = _SUFFIXES.get(width, tuple(str(i) for i in range(width)))
+    return [f"{name}_{s}" for s in suffixes]
 
 
 @dataclass
@@ -82,9 +91,17 @@ class Telemetry:
     def __len__(self) -> int:
         return len(self.columns["t"])
 
+    def has(self, name: str) -> bool:
+        return all(c in self.columns for c in column_names(name))
+
     def get(self, name: str) -> Column:
-        """A logged quantity: shape ``(N,)`` for scalars, ``(N, 3)`` or ``(N, 4)`` otherwise."""
+        """A logged quantity: shape ``(N,)`` for scalars, ``(N, k)`` for vectors. Fields that
+        an older log doesn't have come back as NaN."""
         names = column_names(name)
+        if not self.has(name):
+            width = SCHEMA[name][0]
+            shape = (len(self),) if width == 1 else (len(self), width)
+            return np.full(shape, np.nan)
         if len(names) == 1:
             return self.columns[names[0]]
         return np.stack([self.columns[n] for n in names], axis=1)

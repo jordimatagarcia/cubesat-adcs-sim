@@ -337,3 +337,32 @@ def test_fast_rotation_triggers_detumbling() -> None:
 def test_not_initialised() -> None:
     out = ReferenceAdcs().step(_input())
     assert out.status & AdcsStatus.NOT_INITIALISED
+
+
+# --- diagnostics and variants ----------------------------------------------------------------
+
+
+def test_diagnostics_report_innovation_statistics() -> None:
+    adcs = _adcs()
+    adcs.step(_input())
+    out = adcs.step(_input(t=0.1))
+    assert out.diag is not None
+    assert out.diag["innov"].shape == (13,)
+    assert out.diag["nis"].shape == (4,) and np.all(out.diag["nis"] >= 0.0)
+    assert out.diag["bias_gain"].shape == (6,)
+    np.testing.assert_allclose(np.linalg.norm(out.diag["q_flae"]), 1.0)
+
+
+def test_diagnostics_mark_missing_measurements() -> None:
+    adcs = _adcs()
+    adcs.step(_input())
+    out = adcs.step(_input(t=0.1, sun_valid=False))
+    assert out.diag is not None
+    assert np.all(np.isnan(out.diag["innov"][4:7]))  # sun rows unavailable
+    assert np.isnan(out.diag["nis"][1])
+
+
+def test_only_known_variants_are_accepted() -> None:
+    assert AdcsConfig().variant == "thesis"
+    with pytest.raises(ValueError, match="variant"):
+        AdcsConfig(variant="magic")

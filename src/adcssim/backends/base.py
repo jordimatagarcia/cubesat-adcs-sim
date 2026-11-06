@@ -92,6 +92,8 @@ class AdcsOutput:
     mode: AdcsMode = AdcsMode.OFF
     status: int = 0
     """Implementation-defined status flags (0 = nominal)."""
+    diag: dict[str, FloatArray] | None = field(default=None, compare=False)
+    """Optional analysis data from the reference implementation (not part of adcs.h)."""
 
 
 class AdcsBackend(Protocol):
