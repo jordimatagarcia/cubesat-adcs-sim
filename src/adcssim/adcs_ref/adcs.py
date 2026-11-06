@@ -28,6 +28,7 @@ from numpy.typing import NDArray
 from adcssim.adcs_ref.adcs_improved import ImprovedAdcs
 from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
+from adcssim.adcs_ref.limits import field_plausible, gyro_plausible, safe_norm, unit_plausible
 from adcssim.adcs_ref.tsukf import TwoStageUkf
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
 from adcssim.backends.config import NB, NX, AdcsConfig
@@ -53,7 +54,7 @@ def fault_matrices() -> tuple[FloatArray, FloatArray]:
 
 def _normalize_q(x: FloatArray) -> FloatArray:
     out = x.copy()
-    out[Q] /= np.linalg.norm(out[Q])
+    out[Q] /= safe_norm(float(np.linalg.norm(out[Q])))
     return out
 
 
@@ -129,10 +130,6 @@ def propagate_body_vector(v: FloatArray, w: FloatArray, dt: float) -> FloatArray
     return out / n if n > 0.0 else out
 
 
-def _finite(v: FloatArray) -> bool:
-    return bool(np.all(np.isfinite(v)))
-
-
 class ThesisAdcs:
     """The ``thesis`` variant of the ``python-ref`` backend."""
 
@@ -175,11 +172,12 @@ class ThesisAdcs:
 
         # Sensor readings and on-board reference models are checked separately: in eclipse
         # the sun sensor has no reading but the ephemeris still gives the Sun direction.
-        mag_ref_ok = _finite(inp.mag_ref_i) and float(np.linalg.norm(inp.mag_ref_i)) > 0.0
-        sun_ref_ok = _finite(inp.sun_ref_i) and float(np.linalg.norm(inp.sun_ref_i)) > 0.0
-        mag_ok = inp.mag_valid and _finite(inp.mag_b)
-        sun_ok = inp.sun_valid and _finite(inp.sun_b)
-        gyro_ok = inp.gyro_valid and _finite(inp.gyro_b)
+        # A reading is used if it is finite and physically plausible (limits.py).
+        mag_ref_ok = field_plausible(inp.mag_ref_i)
+        sun_ref_ok = unit_plausible(inp.sun_ref_i)
+        mag_ok = inp.mag_valid and field_plausible(inp.mag_b)
+        sun_ok = inp.sun_valid and unit_plausible(inp.sun_b)
+        gyro_ok = inp.gyro_valid and gyro_plausible(inp.gyro_b)
         if (
             (inp.mag_valid and not mag_ok)
             or (inp.sun_valid and not sun_ok)

@@ -24,6 +24,7 @@ from numpy.typing import NDArray
 
 from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
+from adcssim.adcs_ref.limits import field_plausible, gyro_plausible, unit_plausible
 from adcssim.adcs_ref.mekf import Mekf
 from adcssim.adcs_ref.usque import ATT, GYRO, MAG, Usque
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
@@ -34,10 +35,6 @@ FloatArray = NDArray[np.float64]
 UT = 1e6
 
 FAULT_NONE, FAULT_GYRO, FAULT_MAG = 0, 1, 2
-
-
-def _finite(v: FloatArray) -> bool:
-    return bool(np.all(np.isfinite(v)))
 
 
 class ImprovedAdcs:
@@ -77,14 +74,17 @@ class ImprovedAdcs:
         self.fault = FAULT_NONE
         self.filter.last_update = None
 
-        mag_ref_ok = _finite(inp.mag_ref_i) and float(np.linalg.norm(inp.mag_ref_i)) > 0.0
-        sun_ref_ok = _finite(inp.sun_ref_i) and float(np.linalg.norm(inp.sun_ref_i)) > 0.0
-        mag_ok = inp.mag_valid and _finite(inp.mag_b) and mag_ref_ok
-        sun_ok = inp.sun_valid and _finite(inp.sun_b) and sun_ref_ok
-        gyro_ok = inp.gyro_valid and _finite(inp.gyro_b)
+        # A reading is used if it is finite and physically plausible (limits.py).
+        mag_ref_ok = field_plausible(inp.mag_ref_i)
+        sun_ref_ok = unit_plausible(inp.sun_ref_i)
+        mag_plausible = field_plausible(inp.mag_b)
+        sun_plausible = unit_plausible(inp.sun_b)
+        mag_ok = inp.mag_valid and mag_plausible and mag_ref_ok
+        sun_ok = inp.sun_valid and sun_plausible and sun_ref_ok
+        gyro_ok = inp.gyro_valid and gyro_plausible(inp.gyro_b)
         if (
-            (inp.mag_valid and not _finite(inp.mag_b))
-            or (inp.sun_valid and not _finite(inp.sun_b))
+            (inp.mag_valid and not mag_plausible)
+            or (inp.sun_valid and not sun_plausible)
             or (inp.gyro_valid and not gyro_ok)
         ):
             status |= AdcsStatus.BAD_INPUT
@@ -183,8 +183,10 @@ class ImprovedAdcs:
         w = gyro - f.x[GYRO]
         if mag_ok:
             b_body = (mag_ut - f.x[MAG]) / UT
-        else:
+        elif field_plausible(inp.mag_ref_i):
             b_body = quat_rotate(q, np.asarray(inp.mag_ref_i, dtype=np.float64))
+        else:
+            b_body = np.zeros(3)
         mode, m, status = self.control.update(
             self.config,
             self.ctx.dt,
