@@ -28,6 +28,7 @@ viz = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "matplotlib" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -51,6 +52,7 @@ provides-extras = ["viz"]
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis" },
+    { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },

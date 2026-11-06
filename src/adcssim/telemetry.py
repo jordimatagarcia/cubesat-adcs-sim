@@ -48,6 +48,7 @@ SCHEMA: dict[str, tuple[int, type]] = {
     "w_est": (3, np.float64),
     "bias_mag_est": (3, np.float64),
     "bias_gyro_est": (3, np.float64),
+    "p_diag": (19, np.float64),
     "m_cmd": (3, np.float64),
     "mode": (1, np.uint8),
     "status": (1, np.uint32),
@@ -59,7 +60,11 @@ SCHEMA: dict[str, tuple[int, type]] = {
     "attitude_error": (1, np.float64),
 }
 
-_SUFFIXES = {3: ("x", "y", "z"), 4: ("1", "2", "3", "4")}
+_SUFFIXES = {
+    3: ("x", "y", "z"),
+    4: ("1", "2", "3", "4"),
+    19: tuple(str(i) for i in range(19)),
+}
 
 
 def column_names(name: str) -> list[str]:

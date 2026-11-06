@@ -36,6 +36,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from adcssim.actuators import FS1_MAX_DIPOLE, Magnetorquers
+from adcssim.backends.config import AdcsConfig
 from adcssim.disturbances import DisturbanceModel
 from adcssim.frames import IDENTITY_QUAT, quat_normalize
 from adcssim.orbit import Orbit, Tle
@@ -149,6 +150,7 @@ class Scenario:
     disturbances: DisturbanceModel
     actuators: Magnetorquers
     backend: str
+    adcs: AdcsConfig
     sensors_config: dict[str, Any] = field(repr=False)
     """Raw sensor tables; :meth:`make_sensors` builds fresh (stateful) models from them."""
     source: str = field(default="", repr=False)
@@ -186,8 +188,15 @@ def parse_scenario(data: dict[str, Any], base_dir: Path, source: str = "") -> Sc
     name = root.require("name")
     description = root.get("description", "")
     seed = root.get("seed", 0)
-    adcs_t = root.table("adcs")
-    backend = adcs_t.get("backend", "none")
+    adcs_raw = root.get("adcs", {})
+    if not isinstance(adcs_raw, dict):
+        raise ScenarioError("'adcs' must be a table")
+    adcs_raw = dict(adcs_raw)
+    backend = adcs_raw.pop("backend", "none")
+    try:
+        adcs = AdcsConfig.from_table(adcs_raw)
+    except (TypeError, ValueError) as exc:
+        raise ScenarioError(str(exc)) from None
     if not isinstance(name, str) or not isinstance(description, str):
         raise ScenarioError("'name' and 'description' must be strings")
     if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
@@ -243,7 +252,7 @@ def parse_scenario(data: dict[str, Any], base_dir: Path, source: str = "") -> Sc
         raise ScenarioError("'sensors' must be a table")
     _parse_sensors(_Table(sensors_raw, "sensors"))  # validate now, build fresh per run
 
-    root.finish([orbit_t, time_t, init_t, dist_t, act_t, adcs_t])
+    root.finish([orbit_t, time_t, init_t, dist_t, act_t])
     if not isinstance(backend, str):
         raise ScenarioError("'adcs.backend' must be a string")
 
@@ -262,6 +271,7 @@ def parse_scenario(data: dict[str, Any], base_dir: Path, source: str = "") -> Sc
         disturbances=disturbances,
         actuators=actuators,
         backend=backend,
+        adcs=adcs,
         sensors_config=sensors_raw,
         source=source,
     )

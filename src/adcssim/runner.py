@@ -93,6 +93,7 @@ class Frame:
             "w_est": o.w_est,
             "bias_mag_est": o.bias_mag,
             "bias_gyro_est": o.bias_gyro,
+            "p_diag": o.p_diag,
             "m_cmd": o.m_cmd,
             "mode": int(o.mode),
             "status": o.status,
@@ -122,6 +123,7 @@ class Simulation:
                 dt=scenario.dt_adcs_s,
                 inertia=scenario.spacecraft.inertia.copy(),
                 max_dipole=scenario.actuators.max_dipole.copy(),
+                config=scenario.adcs,
             )
         )
         self.q = scenario.q0.copy()

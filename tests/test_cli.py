@@ -33,10 +33,11 @@ def test_run_writes_telemetry(tmp_path: Path, capsys: pytest.CaptureFixture[str]
         ]
     )
     assert code == 0
-    files = list(tmp_path.glob("case_1a_none_*.parquet"))
+    files = list(tmp_path.glob("case_1a_python-ref_*.parquet"))
     assert len(files) == 1
-    assert len(Telemetry.read(files[0])) == 5
-    assert "case_1a (none)" in capsys.readouterr().out
+    assert len(Telemetry.read(files[0])) == 50  # 5 s at the thesis's 10 Hz
+    out = capsys.readouterr().out
+    assert "case_1a (python-ref)" in out and "att. error" in out
 
 
 def test_run_reports_bad_scenario(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

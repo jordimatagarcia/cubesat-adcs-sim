@@ -30,6 +30,7 @@ viz = [
 [dependency-groups]
 dev = [
     "hypothesis",
+    "matplotlib>=3.11.2",
     "mypy",
     "pre-commit",
     "pytest",

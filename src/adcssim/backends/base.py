@@ -7,11 +7,13 @@ from on-board models, and time. Truth never crosses this interface.
 """
 
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
+
+from adcssim.backends.config import AdcsConfig
 
 FloatArray = NDArray[np.float64]
 
@@ -24,6 +26,18 @@ class AdcsMode(IntEnum):
     SAFE = 4
 
 
+class AdcsStatus(IntFlag):
+    """``ADCS_STATUS_*`` flags of adcs.h."""
+
+    OK = 0
+    BAD_INPUT = 1 << 0
+    NO_ATTITUDE_FIX = 1 << 1
+    FLAE_FAILED = 1 << 2
+    COVARIANCE_RESET = 1 << 3
+    DIPOLE_SATURATED = 1 << 4
+    NOT_INITIALISED = 1 << 5
+
+
 @dataclass(frozen=True)
 class AdcsContext:
     """Static information given to the ADCS when it starts."""
@@ -34,6 +48,8 @@ class AdcsContext:
     """Spacecraft inertia tensor as known on board (kg·m²)."""
     max_dipole: FloatArray
     """Magnetorquer limits (A·m²)."""
+    config: AdcsConfig = field(default_factory=AdcsConfig)
+    """Estimator and controller settings (the scenario's ``[adcs]`` table)."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +85,8 @@ class AdcsOutput:
     """Estimated magnetometer bias (T)."""
     bias_gyro: FloatArray = field(default_factory=lambda: _nan(3))
     """Estimated gyroscope bias (rad/s)."""
+    p_diag: FloatArray = field(default_factory=lambda: np.full(19, np.nan))
+    """Covariance diagonal, state then bias, in filter units (B in µT)."""
     m_cmd: FloatArray = field(default_factory=lambda: np.zeros(3))
     """Magnetorquer dipole command (A·m²)."""
     mode: AdcsMode = AdcsMode.OFF
@@ -98,8 +116,15 @@ class NoAdcs:
         return AdcsOutput()
 
 
+BACKENDS = ("none", "python-ref")
+
+
 def create_backend(name: str) -> AdcsBackend:
     """Backend by name, as used in scenario files and on the command line."""
     if name == "none":
         return NoAdcs()
-    raise ValueError(f"unknown ADCS backend {name!r} (available: none)")
+    if name == "python-ref":
+        from adcssim.adcs_ref.adcs import ReferenceAdcs
+
+        return ReferenceAdcs()
+    raise ValueError(f"unknown ADCS backend {name!r} (available: {', '.join(BACKENDS)})")

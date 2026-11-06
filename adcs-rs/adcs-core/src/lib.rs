@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 /// Version of the C interface defined in `adcs-c/include/adcs.h` (`ADCS_ABI_VERSION`).
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[cfg(test)]
 mod tests {

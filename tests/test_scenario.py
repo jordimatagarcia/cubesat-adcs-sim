@@ -31,22 +31,34 @@ def test_shipped_scenarios_load(path: Path) -> None:
     sc = load_scenario(path)
     assert sc.name == path.stem
     assert sc.steps * sc.dt_adcs_s == pytest.approx(sc.duration_s)
-    assert "Thesis" in sc.description
+    assert sc.backend == "python-ref"
 
 
 def test_thesis_case_values_are_converted_to_si() -> None:
     sc = load_scenario(REPO / "scenarios" / "case_2c.toml")
     np.testing.assert_allclose(sc.w0, np.radians([3.0, 5.0, -4.0]))
+    assert sc.dt_adcs_s == pytest.approx(0.1)
     sensors = sc.make_sensors()
-    assert sensors.magnetometer.errors.noise_std == pytest.approx(1e-6)
+    assert sensors.magnetometer.errors.noise_std == pytest.approx(1e-12)  # σ = 1e-12 T
     assert sensors.magnetometer.errors.lsb == 0.0  # quantize = false
     window = sensors.magnetometer.errors.bias_windows[0]
     np.testing.assert_allclose(window.bias, [0.0, -3e-5, 0.0])
-    assert sensors.gyroscope.errors.noise_std == pytest.approx(math.sqrt(5e-7), rel=1e-3)
+    assert sensors.gyroscope.errors.noise_std == pytest.approx(5e-7, rel=1e-5)
     gyro_window = sensors.gyroscope.errors.bias_windows[0]
     np.testing.assert_allclose(gyro_window.bias, np.radians([0.0, 0.0, 5.0]))
     assert sensors.sun.half_fov_rad == pytest.approx(math.pi / 2)
+    assert sensors.sun.noise_std_rad == pytest.approx(1e-4, rel=1e-4)
     assert sc.start == sc.orbit.epoch + timedelta(seconds=3816)
+
+
+def test_adcs_table_overrides_the_thesis_tuning() -> None:
+    sc = parse(minimal(adcs={"backend": "python-ref", "v": [1, 2, 3, 4], "kp": 1e-4}))
+    assert sc.backend == "python-ref"
+    np.testing.assert_array_equal(sc.adcs.v, np.repeat([1.0, 2.0, 3.0, 4.0], [4, 3, 3, 3]))
+    assert sc.adcs.kp == 1e-4
+    np.testing.assert_array_equal(sc.adcs.w_b, np.repeat([1e-11, 1e-6], [3, 3]))
+    sc2 = parse(minimal(adcs={"detumble_exit_rate_deg_s": 0.5}))
+    assert sc2.adcs.detumble_exit_rate == pytest.approx(math.radians(0.5))
 
 
 def test_defaults() -> None:
@@ -98,6 +110,9 @@ def test_orbit_from_elements_and_explicit_start() -> None:
         (minimal(actuators={"duty_cycle": 1.5}), "duty_cycle"),
         (minimal(disturbances={"aerodynamic": "yes"}), "true or false"),
         (minimal(seed=-3), "seed"),
+        (minimal(adcs={"kpp": 1.0}), "adcs.kpp"),
+        (minimal(adcs={"v": [1.0, 2.0]}), "group values"),
+        (minimal(adcs={"q_target": [1.0, 1.0, 0.0, 0.0]}), "unit quaternion"),
     ],
 )
 def test_invalid_scenarios_are_rejected(data: dict[str, Any], message: str) -> None:

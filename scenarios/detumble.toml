@@ -1,0 +1,45 @@
+# Detumbling and pointing with the reference ADCS (control enabled).
+#
+# Not a thesis case (the thesis evaluated estimation only): the satellite starts tumbling at
+# ~10 °/s and B-dot slows it to below 1 °/s within the first orbit. The quaternion-feedback
+# pointing that follows does not converge within two orbits with the default gains, and the
+# estimate degrades in eclipse with these realistic sensors (docs/adcs.md, "Control").
+# Sensor models use the datasheet resolutions and the 45° per-face sun sensor field of view,
+# so there are coverage gaps as well as eclipses.
+
+name = "detumble"
+description = "Detumbling from ~10 deg/s with B-dot, then (untuned) pointing"
+seed = 7
+
+[time]
+start_offset_s = 3816.0
+duration_s = 11400.0        # two orbits
+dt_dynamics_s = 0.1
+dt_adcs_s = 0.1
+
+[orbit]
+tle = "../data/tle/aalto-1_2021-287.tle"
+
+[initial]
+quaternion = [0.395545146, -0.791090293, 0.197772573, 0.422618262]
+rate_deg_s = [6.0, -5.0, 6.0]
+
+[sensors.magnetometer]
+noise_std_nT = 300.0
+
+[sensors.gyroscope]
+noise_std_deg_s = 0.03
+bias_deg_s = [0.05, -0.08, 0.02]
+quantize = false            # 0.07 °/s steps would hide the slow rates after detumbling
+
+[sensors.sun]
+noise_std_deg = 0.3
+half_fov_deg = 45.0
+
+[actuators]
+duty_cycle = 0.8            # coils off while the magnetometer samples
+
+[adcs]
+backend = "python-ref"
+control_enabled = true
+v = [1e-4, 1e-2, 0.09, 3e-7]   # measurement noise matched to these sensors (B in µT²)

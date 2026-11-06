@@ -1,8 +1,8 @@
 # Thesis scenario 4 (Mata Garcia 2023, §5.5). High sensor noise.
 #
-# Noise levels: the thesis gives σ_AWGN as Simulink noise powers, read here as variances,
-# so σ = √value: magnetometer 1e-9 T² → 31623.0 nT, gyroscope 5e-3 (rad/s)² →
-# 4.051 °/s, sun sensor 0.1 → 18.12°.
+# Noise levels: the thesis gives σ_AWGN per sensor; they are read as standard deviations
+# (the symbol is σ, and this reading reproduces the thesis results; see docs/adcs.md):
+# magnetometer 1e-9 T = 1 nT, gyroscope 5e-3 rad/s = 0.2865 °/s, sun sensor 0.1 = 5.73°.
 #
 # Start time: 3816 s after the TLE epoch, so the eclipse starts at t = 1087 s as in the thesis. With this
 # date the eclipse lasts ~1700 s (thesis: 1167 s; its start date isn't given).
@@ -15,26 +15,26 @@ seed = 1
 start_offset_s = 3816.0
 duration_s = 3000.0
 dt_dynamics_s = 0.1
-dt_adcs_s = 1.0
+dt_adcs_s = 0.1           # the thesis filter ran at 10 Hz (appendix A.1)
 
 [orbit]
 tle = "../data/tle/aalto-1_2021-287.tle"   # the TLE used in the thesis
 
 [initial]
-quaternion = [0.0, 0.0, 0.0, 1.0]
+quaternion = [0.395545146, -0.791090293, 0.197772573, 0.422618262]  # 130° about [1, -2, 0.5]
 rate_deg_s = [3.0, 5.0, -4.0]
 
 [sensors.magnetometer]
-noise_std_nT = 31623.0
+noise_std_nT = 1.0
 quantize = false            # the thesis models white noise only
 
 [sensors.gyroscope]
-noise_std_deg_s = 4.051
+noise_std_deg_s = 0.2864789
 quantize = false
 
 [sensors.sun]
-noise_std_deg = 18.12
+noise_std_deg = 5.7295780
 half_fov_deg = 90.0         # full-sphere coverage, as assumed in the thesis
 
 [adcs]
-backend = "none"
+backend = "python-ref"     # thesis tuning (§5.4.2) is the default configuration

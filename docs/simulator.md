@@ -59,14 +59,16 @@ and run in CI.
 ## Reproducing the thesis cases
 
 The scenario files in `scenarios/` reproduce the seven thesis cases (§5.5), plus case 2c,
-which the thesis mentions but doesn't run.
+which the thesis mentions but doesn't run. They run the reference ADCS at 10 Hz, as the
+thesis filter did, starting from a 130° attitude.
 
 - **TLE:** the Aalto-1 element set printed in the thesis (§2.1.2), in
   `data/tle/aalto-1_2021-287.tle`. pdftotext had broken its spacing; the fixed-column lines
   were rebuilt and confirmed by both TLE checksums.
-- **Noise levels:** the thesis gives σ_AWGN as Simulink noise powers (e.g. 1e-12 for the
-  magnetometer). They are read as variances, so the files use σ = √value, which gives
-  plausible levels: 1 µT, 0.04 °/s and 0.57° for the normal cases.
+- **Noise levels:** the thesis gives σ_AWGN per sensor (e.g. 1e-12 for the magnetometer).
+  They are read as standard deviations, as the symbol says; this reading reproduces the
+  thesis results, while reading them as variances does not (see [adcs.md](adcs.md#findings)).
+  The nominal cases therefore have nearly ideal sensors.
 - **Eclipse:** the runs start 3816 s after the TLE epoch, so the eclipse begins at
   t = 1087 s as in the thesis. With this date it lasts about 1700 s; the thesis reports
   1167 s, but doesn't give the start date it used, and the eclipse length depends on the
