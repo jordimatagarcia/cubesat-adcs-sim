@@ -51,14 +51,18 @@ OUTPUT_SIZE = sum(n for _, n in OUTPUT_LAYOUT)
 
 TOLERANCES = {
     "q_est": 1e-9,
-    "w_est": 1e-11,
-    "bias_mag": 1e-15,
-    "bias_gyro": 1e-11,
+    "w_est": 1e-9,
+    "bias_mag": 1e-13,
+    "bias_gyro": 1e-9,
     "p_diag": 1e-9,
     "m_cmd": 1e-9,
 }
-"""Absolute tolerances for comparing another implementation against the reference (double
-precision). Mode and status must match exactly. NaN must match NaN."""
+"""Absolute tolerances for comparing an implementation against the recorded vectors (double
+precision): q dimensionless, rates in rad/s, the magnetometer bias in T (1e-13 T = 1e-7 µT).
+Loose enough for a different BLAS, CPU or order of operations, whose last-bit differences
+are amplified right after a bias fault inflates the covariance (seen at 2e-11 rad/s between
+two machines); tight enough to catch any algorithmic change, which shows up at 1e-6 or more.
+Mode and status must match exactly. NaN must match NaN."""
 
 
 @dataclass

@@ -193,9 +193,9 @@
  },
  "tolerances": {
   "q_est": 1e-09,
-  "w_est": 1e-11,
-  "bias_mag": 1e-15,
-  "bias_gyro": 1e-11,
+  "w_est": 1e-09,
+  "bias_mag": 1e-13,
+  "bias_gyro": 1e-09,
   "p_diag": 1e-09,
   "m_cmd": 1e-09
  }
