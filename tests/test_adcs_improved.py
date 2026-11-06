@@ -196,3 +196,45 @@ def test_matched_tuning_uses_sensor_noise_with_floors() -> None:
     thesis = matched_improved_config(load_scenario(REPO / "scenarios" / "case_1a.toml"))
     assert thesis.sigma_mag_noise == MAG_FLOOR_UT  # 1 pT sensor, floored at 0.1 µT
     assert dataclasses.replace(thesis, variant="thesis").variant == "thesis"
+
+
+# --- MEKF baseline -----------------------------------------------------------------------------
+
+
+def test_mekf_transition_matrix_matches_numerical_integration() -> None:
+    from adcssim.adcs_ref.mekf import _rotation_matrix
+    from adcssim.frames import skew
+
+    w = np.radians([3.0, -5.0, 2.0])
+    dt = 0.7
+    # δθ̇ = −[ω×]δθ − δβ, integrated with small Euler steps.
+    n = 20000
+    h = dt / n
+    phi11, phi12 = np.eye(3), np.zeros((3, 3))
+    for _ in range(n):
+        phi12 = phi12 + h * (-skew(w) @ phi12 - np.eye(3))
+        phi11 = phi11 + h * (-skew(w) @ phi11)
+    exact11, exact12 = _rotation_matrix(w, dt)
+    np.testing.assert_allclose(exact11, phi11, atol=1e-4)
+    np.testing.assert_allclose(exact12, phi12, atol=1e-4)
+
+
+def test_mekf_estimates_both_biases() -> None:
+    from adcssim.adcs_ref.mekf import Mekf
+
+    f = Mekf(1e-4, 1e-6, 0.1, 1e-3, 1e-3)
+    q_true = quat_from_axis_angle([0, 1, 0], 0.4)
+    f.reset(q_true, np.r_[np.full(3, 0.01**2), np.full(3, 0.01**2), np.full(3, 50.0**2)])
+    gyro_bias = np.radians([0.2, -0.1, 0.3])
+    mag_bias = np.array([5.0, -8.0, 2.0])
+    _simulate(f, q_true, np.radians([2.0, 1.0, -3.0]), gyro_bias, mag_bias, 3000)  # type: ignore[arg-type]
+    np.testing.assert_allclose(f.x[3:6], gyro_bias, atol=math.radians(0.01))
+    np.testing.assert_allclose(f.x[6:9], mag_bias, atol=0.2)
+
+
+def test_dispatcher_selects_the_mekf() -> None:
+    from adcssim.adcs_ref.mekf import Mekf
+
+    adcs = ReferenceAdcs()
+    adcs.reset(dataclasses.replace(_ctx(), config=AdcsConfig(variant="mekf")))
+    assert isinstance(adcs.impl, ImprovedAdcs) and isinstance(adcs.impl.filter, Mekf)

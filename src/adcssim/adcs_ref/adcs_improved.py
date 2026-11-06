@@ -1,5 +1,6 @@
 """The improved ADCS variant: error-state UKF (USQUE) with vector measurements, gyro and
-magnetometer bias states, and innovation-based fault detection.
+magnetometer bias states, and innovation-based fault detection. Variant ``mekf`` runs the
+same model with a multiplicative EKF (``mekf.py``) instead.
 
 Designed from the diagnosis of the thesis variant (docs/results/diagnosis.md):
 
@@ -23,6 +24,7 @@ from numpy.typing import NDArray
 
 from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
+from adcssim.adcs_ref.mekf import Mekf
 from adcssim.adcs_ref.usque import ATT, GYRO, MAG, Usque
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
 from adcssim.backends.config import AdcsConfig
@@ -43,7 +45,7 @@ class ImprovedAdcs:
 
     def __init__(self) -> None:
         self.ctx: AdcsContext | None = None
-        self.filter: Usque | None = None
+        self.filter: Usque | Mekf | None = None
 
     @property
     def config(self) -> AdcsConfig:
@@ -53,14 +55,14 @@ class ImprovedAdcs:
     def reset(self, ctx: AdcsContext) -> None:
         cfg = ctx.config
         self.ctx = ctx
-        self.filter = Usque(
-            cfg.usque_lambda,
+        noise = (
             cfg.sigma_gyro_noise,
             cfg.sigma_gyro_bias_walk,
             cfg.sigma_mag_noise,
             cfg.sigma_mag_bias_walk,
             cfg.sigma_sun_noise,
         )
+        self.filter = Mekf(*noise) if cfg.variant == "mekf" else Usque(cfg.usque_lambda, *noise)
         self.control = ModeController()
         self.initialised = False
         self.gyro_prev = np.zeros(3)

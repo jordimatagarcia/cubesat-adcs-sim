@@ -11,6 +11,8 @@ selected with `variant` in a scenario's `[adcs]` table:
   variant ([results/diagnosis.md](results/diagnosis.md)). Described in
   [The improved variant](#the-improved-variant); compared with the thesis variant in
   [results/variants.md](results/variants.md).
+- **`mekf`**: the same model and settings with a multiplicative extended Kalman filter, the
+  industry-standard baseline ([MEKF baseline](#mekf-baseline)).
 
 Both share the interface (`adcs-c/include/adcs.h`), the mode manager and the control laws.
 
@@ -224,3 +226,39 @@ Worst attitude error in each scenario's hardest condition:
   filter was then badly overconfident (its error inside its 3σ bound only 21–35% of the
   time in the thesis cases). Using the mean of the two readings removed it: case 1a went
   from 0.12° to 0.01° worst-case error in sunlight, and the consistency to 100%.
+
+## MEKF baseline
+
+The `mekf` variant (`adcs_ref/mekf.py`, Markley & Crassidis 2014 §6.2) uses exactly the
+improved variant's model, tuning, initialisation, fault detector and controller; only the
+filter differs: Jacobians (exact discrete transition matrix, Joseph-form covariance update)
+instead of sigma points. The question it answers: does the UKF's extra cost buy anything?
+
+**On the ten scenarios** ([results/variants.md](results/variants.md)) the two are
+indistinguishable: identical to two decimals in seven, the MEKF better on the gyro-fault
+cases (worst 1.3° vs 1.7° in 2a and 2c), the UKF marginally better while detumbling (eclipse
+worst 0.58° vs 0.69°). The MEKF needs 25–60% less computation per step in Python. Once FLAE
+has initialised the filter, errors stay small and the linearisation is essentially exact.
+
+**From large initial errors** (`tools/large_error_experiment.py`; synthetic rotation,
+realistic noise, honest initial uncertainty, 20 cases each), where a UKF is usually expected
+to win:
+
+| Initial error | UKF: converged (median time) | MEKF: converged (median time) |
+|---|---|---|
+| 10° | 20/20 (0.1 s) | 20/20 (0.2 s) |
+| 30° | 20/20 (13 s) | 20/20 (15 s) |
+| 60° | 4/20 (100 s) | 19/20 (30 s) |
+| 90° | 1/20 (44 s) | 12/20 (30 s) |
+| 150° | 6/20 (58 s) | 0/20 |
+
+The UKF is worse from 60° on. Its sigma points spread to √(n + λ) = √10 ≈ 3.2σ, so with a
+60° uncertainty they reach ~190°, beyond the 180° where the 3-parameter attitude error is
+well defined; the points wrap around and corrupt the mean. A smaller λ narrows the spread
+but makes the centre weight negative. Neither filter is meant to start that far off: FLAE
+initialises within a degree and a detected fault inflates the attitude uncertainty by ~3°.
+
+**Conclusion.** In this application the MEKF matches the UKF's accuracy at lower cost, with
+simpler code (no 9×9 Cholesky factorisation and no sigma points per step) and better
+behaviour from large errors. It is the stronger candidate for the flight implementation in
+C and Rust; the UKF stays in the Python reference as the documented comparison.

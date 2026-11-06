@@ -326,7 +326,8 @@ class ReferenceAdcs:
         self.impl: ThesisAdcs | ImprovedAdcs | None = None
 
     def reset(self, ctx: AdcsContext) -> None:
-        self.impl = ImprovedAdcs() if ctx.config.variant == "improved" else ThesisAdcs()
+        variant = ctx.config.variant
+        self.impl = ImprovedAdcs() if variant in ("improved", "mekf") else ThesisAdcs()
         self.impl.reset(ctx)
 
     def step(self, inp: AdcsInput) -> AdcsOutput:

@@ -19,9 +19,9 @@ SUN_FLOOR_RAD = 2e-4
 GYRO_FLOOR_RAD_S = 1e-5
 
 
-def matched_improved_config(scenario: Scenario) -> AdcsConfig:
-    """The scenario's ADCS configuration switched to the improved variant, with the sensor
-    noise taken from the scenario's sensor models (and the floors above)."""
+def matched_improved_config(scenario: Scenario, variant: str = "improved") -> AdcsConfig:
+    """The scenario's ADCS configuration switched to the improved (or ``mekf``) variant,
+    with the sensor noise taken from the scenario's sensor models (and the floors above)."""
     sensors = scenario.make_sensors()
     mag = max(sensors.magnetometer.errors.noise_std * 1e6, MAG_FLOOR_UT)
     sun = max(sensors.sun.noise_std_rad, SUN_FLOOR_RAD)
@@ -33,7 +33,7 @@ def matched_improved_config(scenario: Scenario) -> AdcsConfig:
         mag = math.hypot(mag, sensors.magnetometer.errors.lsb * 1e6 / math.sqrt(12.0))
     return replace(
         scenario.adcs,
-        variant="improved",
+        variant=variant,
         sigma_mag_noise=mag,
         sigma_sun_noise=sun,
         sigma_gyro_noise=gyro,

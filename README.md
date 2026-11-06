@@ -51,8 +51,9 @@ A reference implementation in NumPy (`src/adcssim/adcs_ref/`) with two variants:
   0.43°) and while detumbling (diverged → 0.58°), and its uncertainty matches its real
   error.
 
-The C and Rust versions implement the same interface ([adcs.h](adcs-c/include/adcs.h)) and
-are tested against recorded golden vectors.
+A multiplicative EKF on the same model matches the UKF's accuracy at lower cost
+([MEKF baseline](docs/adcs.md#mekf-baseline)). The C and Rust versions implement the same
+interface ([adcs.h](adcs-c/include/adcs.h)) and are tested against recorded golden vectors.
 
 - [How both variants work, and where and why they differ from the thesis](docs/adcs.md)
 - [Thesis test cases](docs/results/thesis_cases.md) ·

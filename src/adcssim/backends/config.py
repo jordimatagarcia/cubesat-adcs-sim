@@ -40,11 +40,13 @@ def _groups(groups: tuple[int, ...], *values: float) -> FloatArray:
     return np.repeat(np.array(values), groups)
 
 
-VARIANTS = ("thesis", "improved")
+VARIANTS = ("thesis", "improved", "mekf")
 """``thesis``: the algorithm as reproduced from the thesis (docs/adcs.md), frozen together
 with its golden vectors and results report. ``improved``: the error-state UKF designed from
 the diagnosis (docs/results/diagnosis.md); its settings are the ``usque_*``, ``sigma_*``,
-``p0_*`` and ``fault_*`` fields below."""
+``p0_*`` and ``fault_*`` fields below. ``mekf``: the same model and settings with a
+multiplicative extended Kalman filter instead of the UKF, as the industry-standard
+baseline."""
 
 
 @dataclass(frozen=True)
