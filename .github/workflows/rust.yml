@@ -17,6 +17,8 @@ defaults:
 
 jobs:
   check:
+    # Formatting, lints and tests (unit, FFI layout against adcs.h, all golden vectors) in
+    # both precisions.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -25,13 +27,40 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --features adcs-ffi/f32 -- -D warnings
+      - run: cargo test --workspace --release
+      - run: cargo test --workspace --release --features adcs-ffi/f32
 
   miri:
+    # Undefined-behaviour check of the unit tests, including the FFI crate's unsafe code.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
-      - run: cargo miri test -p adcs-core
+      - run: cargo miri test -p adcs-core -p adcs-ffi
+
+  cortex-m:
+    # no_std static library for Cortex-M4F (float) and Cortex-M7 (double), linked into the C
+    # bare-metal example.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - run: tools/cross_build.sh
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: tools/fuzz.sh 120
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash
+          path: adcs-rs/crash-*

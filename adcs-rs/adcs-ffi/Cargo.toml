@@ -16,3 +16,10 @@ adcs-core = { path = "../adcs-core" }
 
 [lints]
 workspace = true
+
+[features]
+default = ["std"]
+# Host builds (the shared library loaded by the simulator). Without it: no_std, for firmware.
+std = []
+# Single precision, matching a C build with ADCS_USE_FLOAT.
+f32 = ["adcs-core/f32"]

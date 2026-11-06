@@ -9,3 +9,13 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+# Single precision (adcs_real = float in the C header).
+f32 = []

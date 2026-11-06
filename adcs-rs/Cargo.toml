@@ -1,5 +1,6 @@
 [workspace]
 members = ["adcs-core", "adcs-ffi"]
+exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]
@@ -15,6 +16,16 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
+[profile.dev]
+panic = "abort"
+
 [profile.release]
 lto = true
 codegen-units = 1
+# No unwinding across the C interface, and none needed on a microcontroller.
+panic = "abort"
+
+# Firmware builds (tools/cross_build.sh): optimised for size, like -Os.
+[profile.firmware]
+inherits = "release"
+opt-level = "s"

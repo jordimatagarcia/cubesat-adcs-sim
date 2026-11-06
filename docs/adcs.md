@@ -351,3 +351,50 @@ uv run adcssim view scenarios/detumble.toml --backend c
 ```
 
 The backend loads `adcs-c/build/libadcs_c.so`, or the library named in `ADCSSIM_C_LIB`.
+
+## The Rust library
+
+`adcs-rs/` implements the same `adcs.h` interface, as a port of the C library: the same
+modules, algorithms and operation order (so both round the same way), with the
+hand-written linear algebra kept rather than replaced by a crate, so that the comparison
+in Phase 7 measures the languages and not the libraries.
+
+- **`adcs-core`** holds the algorithms. It is `no_std`, has `#![forbid(unsafe_code)]`, and
+  takes its maths functions from `libm`. `Adcs` can be used directly from Rust (for example
+  in a `static`), with `Result` errors instead of status codes. `#[repr(C)]` structs mirror
+  the header. Their C `bool` fields are `u8`, so a foreign caller passing 2 cannot create
+  an invalid Rust `bool`.
+- **`adcs-ffi`** exports the four C functions and is the only crate with `unsafe` code:
+  turning the caller's pointers into references, each block with a `SAFETY:` comment
+  stating the `adcs.h` precondition it relies on. With the default `std` feature it builds
+  the shared library the simulator loads; without it, a `no_std` static library for
+  firmware. Panics abort (none are expected: there is no allocation and all indices are
+  fixed by array sizes).
+- **Precision**: `f64`, or `f32` with the `f32` feature, like `ADCS_USE_FLOAT`.
+
+Verification:
+
+| Check | How |
+|---|---|
+| Matches the reference | All 16 golden vectors, by a Rust test (`adcs-core/tests/golden.rs`) and through the simulator's ctypes backend. The differences from the Python reference are the C library's, to the digit, in all but one vector (high noise, where they are smaller). |
+| Closed loop | The 60 s closed-loop scenarios in `tests/test_native.py` run against both libraries and match the Python reference to 10⁻⁸. |
+| Full scenarios | `tools/crosscheck.py` (all 10 scenarios, both variants, to the end): Rust differs from the Python reference exactly as much as C does. Rust and C agree bit for bit in 8 of the 10 thesis-variant runs, including detumble with the thesis variant over 114 000 steps, the one run where both drift from the Python reference: so that drift comes from NumPy's rounding, not from the ports. The remaining differences between Rust and C are at most 2·10⁻¹¹, almost all in the MEKF, which calls sine and cosine every step: Rust takes them from the `libm` crate, C from the system's maths library. |
+| Interface | A test compiles a C program against `adcs.h` and checks every struct size and field offset against the Rust structs, in both precisions. |
+| Undefined behaviour | Miri runs the unit tests, including the FFI crate's misuse tests (null and misaligned pointers, uninitialised state, invalid `bool` bytes). |
+| Robustness | The same libFuzzer harness as the C library (`fuzz/fuzz_targets/step.rs`), built with the stable toolchain and run with debug assertions and overflow checks, 2 minutes per CI run (`tools/fuzz.sh`). |
+| Lints | `clippy::pedantic` with warnings as errors, both precisions. |
+| Bare metal | `tools/cross_build.sh` builds the `no_std` static library for a Cortex-M4F (float) and a Cortex-M7 (double) and links the C example `examples/bare_metal.c` against it, unchanged: the Rust library is a drop-in replacement for the C one in firmware too. No `malloc`. |
+
+First look at code size: with the size-optimised `firmware` profile (`opt-level = "s"`) the
+firmware image has 36 KB of code (M4F) and 38 KB (M7), against 23 KB and 27 KB for the C
+library at `-O2`. At `opt-level = 2` it is 90–95 KB: LLVM unrolls the fixed-size 13×13
+loops of the UKF and keeps a bounds check in each. Phase 7 compares size and speed
+properly, at matching optimisation levels.
+
+```bash
+cargo build --release --manifest-path adcs-rs/Cargo.toml
+uv run adcssim run scenarios/case_1a.toml --backend rust
+```
+
+The backend loads `adcs-rs/target/release/libadcs_rs.so`, or the library named in
+`ADCSSIM_RUST_LIB`.

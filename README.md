@@ -1,7 +1,7 @@
 # cubesat-adcs-sim
 
 > **Status: work in progress.** The simulator, the visualization, the reference ADCS in
-> Python and the ADCS in C run. Next: the ADCS in Rust, and the C vs Rust comparison.
+> Python and the ADCS in C and in Rust run. Next: the C vs Rust comparison.
 
 ![Viewer: thesis case 1a at 300× speed, entering eclipse](docs/images/viewer.gif)
 
@@ -32,6 +32,7 @@ The thesis test cases are in `scenarios/`, set up to run the reference ADCS:
 uv run adcssim run scenarios/case_1a.toml              # writes runs/case_1a_python-ref_<time>.parquet
 uv run adcssim run scenarios/case_1a.toml --backend none   # open loop, no ADCS
 uv run adcssim run scenarios/case_1a.toml --backend c      # the C library (build it first)
+uv run adcssim run scenarios/case_1a.toml --backend rust   # the Rust library (build it first)
 uv run python tools/thesis_report.py                   # all cases → docs/results/thesis_cases.md
 ```
 
@@ -59,8 +60,13 @@ A multiplicative EKF on the same model matches the UKF's accuracy at lower cost
 ([adcs.h](adcs-c/include/adcs.h)): C11 with no heap, built for ARM Cortex-M as well as the
 PC, and verified against golden vectors recorded from the Python reference (agreement to
 ~10⁻¹⁴), under sanitizers and a fuzzer. Any scenario, and the viewer, can run on it with
-`--backend c` ([details](docs/adcs.md#the-c-library)). The Rust version will implement the
-same interface.
+`--backend c` ([details](docs/adcs.md#the-c-library)).
+
+**In Rust** (`adcs-rs/`), the same algorithms behind the same C interface: a `no_std` core
+with no `unsafe` code, and a thin FFI crate that is the only place with `unsafe`. It matches
+the golden vectors like the C library, is checked with Miri and a fuzzer, and links into the
+same bare-metal C example for Cortex-M. Run it with `--backend rust`
+([details](docs/adcs.md#the-rust-library)).
 
 - [How both variants work, and where and why they differ from the thesis](docs/adcs.md)
 - [Thesis test cases](docs/results/thesis_cases.md) ·
@@ -110,7 +116,7 @@ uv run pytest                # Python tests
 
 cmake -S adcs-c -B adcs-c/build && cmake --build adcs-c/build && ctest --test-dir adcs-c/build
 
-cargo test --manifest-path adcs-rs/Cargo.toml
+cargo test --release --manifest-path adcs-rs/Cargo.toml
 ```
 
 ## License
