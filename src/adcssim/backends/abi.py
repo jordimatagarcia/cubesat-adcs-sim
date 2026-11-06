@@ -13,7 +13,9 @@ import numpy as np
 from adcssim.backends.base import AdcsInput, AdcsMode, AdcsOutput
 from adcssim.backends.config import NB, NX, AdcsConfig
 
-ABI_VERSION = 2
+ABI_VERSION = 3
+VARIANT_IDS = {"thesis": 0, "mekf": 1}
+"""Variants implemented by the C and Rust libraries (the UKF variant is Python-only)."""
 
 Real = c_double
 Vec3 = Real * 3
@@ -22,6 +24,7 @@ Vec4 = Real * 4
 
 class AdcsConfigC(Structure):
     _fields_ = [
+        ("variant", c_uint32),
         ("dt", Real),
         ("process_dt", Real),
         ("inertia", Real * 9),
@@ -36,6 +39,19 @@ class AdcsConfigC(Structure):
         ("w_x", Real * NX),
         ("w_b", Real * NB),
         ("v", Real * NX),
+        ("sigma_gyro_noise", Real),
+        ("sigma_gyro_bias_walk", Real),
+        ("sigma_mag_noise", Real),
+        ("sigma_mag_bias_walk", Real),
+        ("sigma_sun_noise", Real),
+        ("p0_attitude", Real),
+        ("p0_gyro_bias", Real),
+        ("p0_mag_bias", Real),
+        ("fault_nis_threshold", Real),
+        ("fault_steps", c_uint32),
+        ("fault_gyro_bias_sigma", Real),
+        ("fault_mag_bias_sigma", Real),
+        ("fault_attitude_sigma", Real),
         ("control_enabled", c_bool),
         ("bdot_gain", Real),
         ("kp", Real),
@@ -89,7 +105,10 @@ def _arr(ctype: type, values: object) -> ctypes.Array:  # type: ignore[type-arg]
 def config_to_c(
     cfg: AdcsConfig, dt: float, inertia: np.ndarray, max_dipole: np.ndarray
 ) -> AdcsConfigC:
+    if cfg.variant not in VARIANT_IDS:
+        raise ValueError(f"variant {cfg.variant!r} is not implemented by the C/Rust libraries")
     return AdcsConfigC(
+        variant=VARIANT_IDS[cfg.variant],
         dt=dt,
         process_dt=cfg.process_dt,
         inertia=_arr(Real * 9, inertia),
@@ -104,6 +123,19 @@ def config_to_c(
         w_x=_arr(Real * NX, cfg.w_x),
         w_b=_arr(Real * NB, cfg.w_b),
         v=_arr(Real * NX, cfg.v),
+        sigma_gyro_noise=cfg.sigma_gyro_noise,
+        sigma_gyro_bias_walk=cfg.sigma_gyro_bias_walk,
+        sigma_mag_noise=cfg.sigma_mag_noise,
+        sigma_mag_bias_walk=cfg.sigma_mag_bias_walk,
+        sigma_sun_noise=cfg.sigma_sun_noise,
+        p0_attitude=cfg.p0_attitude,
+        p0_gyro_bias=cfg.p0_gyro_bias,
+        p0_mag_bias=cfg.p0_mag_bias,
+        fault_nis_threshold=cfg.fault_nis_threshold,
+        fault_steps=cfg.fault_steps,
+        fault_gyro_bias_sigma=cfg.fault_gyro_bias_sigma,
+        fault_mag_bias_sigma=cfg.fault_mag_bias_sigma,
+        fault_attitude_sigma=cfg.fault_attitude_sigma,
         control_enabled=cfg.control_enabled,
         bdot_gain=cfg.bdot_gain,
         kp=cfg.kp,

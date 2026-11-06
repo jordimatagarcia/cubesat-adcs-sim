@@ -1,7 +1,7 @@
 """Golden vectors: recorded ADCS input and output streams that every implementation must
 reproduce (Python reference, C, Rust).
 
-Each vector is two files in ``testdata/golden/``:
+Each vector is two files in ``testdata/golden/<variant>/``:
 
 - ``<name>.json``: configuration (the ``adcs_config`` fields), record layout, step count and
   tolerances.

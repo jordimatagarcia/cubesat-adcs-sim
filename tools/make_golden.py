@@ -1,6 +1,7 @@
-"""Regenerate the golden vectors in testdata/golden/ from the Python reference ADCS.
+"""Generate golden vectors in testdata/golden/<variant>/ from the Python reference ADCS.
 
-    uv run python tools/make_golden.py
+    uv run python tools/make_golden.py mekf             # the MEKF set
+    uv run python tools/make_golden.py thesis --force   # regenerate the frozen thesis set
 
 Each vector is a short (40 s at 10 Hz) closed-loop run of a thesis scenario with the event
 of interest moved near the start, so the files stay small while still covering every code
@@ -8,9 +9,13 @@ path: nominal estimation, bias onsets, eclipse entry, starting in eclipse, high 
 control, and invalid inputs.
 
 Only rerun this after a deliberate change to the reference algorithms; the C and Rust
-implementations are tested against these files.
+implementations are tested against these files. The thesis set is frozen (it was recorded
+before the detumble scenario moved to 50 Hz dynamics, so regenerating it would change its
+control vector); ``--force`` is required to overwrite it.
 """
 
+import argparse
+import dataclasses
 import sys
 import tomllib
 from collections.abc import Callable
@@ -21,13 +26,14 @@ from typing import Any
 import numpy as np
 
 from adcssim.adcs_ref.adcs import ReferenceAdcs
+from adcssim.adcs_ref.tuning import matched_improved_config
 from adcssim.backends import AdcsContext, AdcsInput, AdcsOutput
 from adcssim.golden import GoldenVector
 from adcssim.runner import Simulation
 from adcssim.scenario import Scenario, parse_scenario
 
 REPO = Path(__file__).resolve().parent.parent
-OUT = REPO / "testdata" / "golden"
+GOLDEN = REPO / "testdata" / "golden"
 DURATION_S = 40.0
 ECLIPSE_ENTRY_OFFSET_S = 3816.0 + 1087.0  # TLE epoch → eclipse entry (thesis case 1a timing)
 ECLIPSE_EXIT_OFFSET_S = 4913.0 + 1689.3  # case 3a start → sunrise
@@ -135,9 +141,20 @@ CASES: dict[str, tuple[str, Callable[[], Scenario]]] = {
 
 
 def main() -> int:
-    OUT.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("variant", choices=("thesis", "mekf"))
+    parser.add_argument("--force", action="store_true", help="overwrite the frozen thesis set")
+    args = parser.parse_args()
+    out_dir = GOLDEN / args.variant
+    if args.variant == "thesis" and any(out_dir.glob("*.json")) and not args.force:
+        print("the thesis set is frozen; use --force to overwrite it", file=sys.stderr)
+        return 2
+    out_dir.mkdir(parents=True, exist_ok=True)
     for name, (description, make) in CASES.items():
-        rec, ctx = record(make())
+        sc = make()
+        if args.variant != "thesis":
+            sc = dataclasses.replace(sc, adcs=matched_improved_config(sc, args.variant))
+        rec, ctx = record(sc)
         # The recorded outputs must be reproducible from the inputs alone.
         again = replay(ctx, rec.inputs)
         for a, b in zip(rec.outputs, again, strict=True):
@@ -163,7 +180,7 @@ def main() -> int:
                 config=ctx.config,
                 inputs=inputs,
                 outputs=outputs,
-            ).write(OUT)
+            ).write(out_dir)
             errs = [o for o in outputs if np.all(np.isfinite(o.q_est))]
             print(f"{vname:14s} {len(inputs)} steps, {len(errs)} with an estimate")
     return 0

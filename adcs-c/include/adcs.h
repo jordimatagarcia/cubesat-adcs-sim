@@ -20,7 +20,7 @@ extern "C" {
 #endif
 
 /* Version of this interface. Incremented on any change to the exported structs or functions. */
-#define ADCS_ABI_VERSION 2u
+#define ADCS_ABI_VERSION 3u
 
 #ifdef ADCS_USE_FLOAT
 typedef float adcs_real;
@@ -28,9 +28,17 @@ typedef float adcs_real;
 typedef double adcs_real;
 #endif
 
-/* Sizes of the estimator: state x = [q(4), sun(3), B(3), w(3)], bias b = [mag(3), gyro(3)]. */
+/* Sizes of the thesis estimator: state x = [q(4), sun(3), B(3), w(3)], bias b = [mag(3),
+ * gyro(3)]. The MEKF uses 9 states (attitude error, gyro bias, magnetometer bias). */
 #define ADCS_NX 13
 #define ADCS_NB 6
+#define ADCS_MEKF_NX 9
+
+/* Estimator selected in adcs_config.variant (docs/adcs.md). */
+typedef enum {
+    ADCS_VARIANT_THESIS = 0, /* FLAE + two-stage UKF, as reproduced from the thesis */
+    ADCS_VARIANT_MEKF = 1    /* multiplicative EKF with vector measurements (flight choice) */
+} adcs_variant;
 
 typedef enum {
     ADCS_MODE_OFF = 0,
@@ -47,8 +55,10 @@ typedef enum {
 #define ADCS_STATUS_COVARIANCE_RESET (1u << 3) /* covariance lost positive definiteness */
 #define ADCS_STATUS_DIPOLE_SATURATED (1u << 4)
 #define ADCS_STATUS_NOT_INITIALISED (1u << 5) /* adcs_step called before adcs_init */
+#define ADCS_STATUS_BIAS_FAULT (1u << 6)      /* MEKF: a sensor-bias fault was declared */
 
 typedef struct {
+    uint32_t variant;     /* adcs_variant */
     adcs_real dt;         /* control period (s) */
     adcs_real process_dt; /* RK4 step of the filter's process model (s); dt is split into steps */
     adcs_real inertia[9]; /* inertia tensor as known on board, row-major (kg m^2) */
@@ -68,6 +78,21 @@ typedef struct {
     adcs_real w_x[ADCS_NX];  /* state process noise per filter step (diagonal) */
     adcs_real w_b[ADCS_NB];  /* bias process noise per filter step (diagonal) */
     adcs_real v[ADCS_NX];    /* measurement noise (diagonal) */
+
+    /* MEKF. Noise values are standard deviations; the magnetic field is in microtesla. */
+    adcs_real sigma_gyro_noise;     /* gyro white noise per sample (rad/s) */
+    adcs_real sigma_gyro_bias_walk; /* gyro bias random walk (rad/s/sqrt(s)) */
+    adcs_real sigma_mag_noise;      /* magnetometer noise (uT) */
+    adcs_real sigma_mag_bias_walk;  /* magnetometer bias random walk (uT/sqrt(s)) */
+    adcs_real sigma_sun_noise;      /* sun sensor noise per component (rad) */
+    adcs_real p0_attitude;          /* initial attitude uncertainty (rad) */
+    adcs_real p0_gyro_bias;         /* initial gyro bias uncertainty (rad/s) */
+    adcs_real p0_mag_bias;          /* initial magnetometer bias uncertainty (uT) */
+    adcs_real fault_nis_threshold;  /* per-step sun or magnetometer NIS that is suspect */
+    uint32_t fault_steps;           /* consecutive suspect steps before a fault is declared */
+    adcs_real fault_gyro_bias_sigma;  /* uncertainties added on a fault */
+    adcs_real fault_mag_bias_sigma;
+    adcs_real fault_attitude_sigma;
 
     /* Control */
     bool control_enabled; /* false: estimation only (the thesis cases) */
@@ -97,7 +122,10 @@ typedef struct {
     adcs_real w_est[3];     /* estimated body rate (rad/s) */
     adcs_real bias_mag[3];  /* estimated magnetometer bias (T) */
     adcs_real bias_gyro[3]; /* estimated gyroscope bias (rad/s) */
-    adcs_real p_diag[ADCS_NX + ADCS_NB]; /* covariance diagonal: state then bias (filter units) */
+    /* Covariance diagonal in filter units. Thesis: [q(4), sun(3), B(3), w(3), b_mag(3),
+     * b_gyro(3)]. MEKF: [attitude error (3, rad^2), NaN x7, rate (3), b_mag (3, uT^2),
+     * b_gyro (3)], so the same indices mean the same quantities where both have them. */
+    adcs_real p_diag[ADCS_NX + ADCS_NB];
     adcs_real m_cmd[3];     /* magnetorquer dipole command (A m^2) */
     uint32_t mode;          /* adcs_mode */
     uint32_t status;        /* ADCS_STATUS_* flags */

@@ -12,11 +12,26 @@ from adcssim.backends import AdcsContext, AdcsMode, AdcsStatus
 from adcssim.golden import INPUT_SIZE, OUTPUT_SIZE, GoldenVector, compare
 from tests.conftest import REPO
 
-GOLDEN = sorted((REPO / "testdata" / "golden").glob("*.json"))
+GOLDEN = sorted((REPO / "testdata" / "golden").glob("*/*.json"))
+NAMES = {
+    "nominal",
+    "bad_input",
+    "gyro_bias",
+    "mag_bias",
+    "eclipse_entry",
+    "eclipse_start",
+    "high_noise",
+    "control",
+}
 
 
-def test_golden_set_is_complete() -> None:
-    names = {p.stem for p in GOLDEN}
+@pytest.mark.parametrize("variant", ["thesis", "mekf"])
+def test_golden_set_is_complete(variant: str) -> None:
+    files = [p for p in GOLDEN if p.parent.name == variant]
+    names = {p.stem for p in files}
+    assert names == NAMES
+    for p in files:
+        assert GoldenVector.read(p).config.variant == variant
     assert names == {
         "nominal",
         "bad_input",
@@ -27,12 +42,12 @@ def test_golden_set_is_complete() -> None:
         "high_noise",
         "control",
     }
-    for p in GOLDEN:
+    for p in files:
         size = p.with_suffix(".f64").stat().st_size
         assert size % (8 * (INPUT_SIZE + OUTPUT_SIZE)) == 0
 
 
-@pytest.mark.parametrize("path", GOLDEN, ids=[p.stem for p in GOLDEN])
+@pytest.mark.parametrize("path", GOLDEN, ids=[f"{p.parent.name}/{p.stem}" for p in GOLDEN])
 def test_reference_reproduces_golden_vector(path: Path) -> None:
     g = GoldenVector.read(path)
     adcs = ReferenceAdcs()
@@ -42,9 +57,10 @@ def test_reference_reproduces_golden_vector(path: Path) -> None:
         assert not problems, f"step {k} (t = {inp.t:.1f} s): {problems}"
 
 
-def test_golden_vectors_cover_the_intended_paths() -> None:
+@pytest.mark.parametrize("variant", ["thesis", "mekf"])
+def test_golden_vectors_cover_the_intended_paths(variant: str) -> None:
     def load(name: str) -> GoldenVector:
-        return GoldenVector.read(REPO / "testdata" / "golden" / f"{name}.json")
+        return GoldenVector.read(REPO / "testdata" / "golden" / variant / f"{name}.json")
 
     bad = load("bad_input")
     assert any(o.status & AdcsStatus.BAD_INPUT for o in bad.outputs)
@@ -61,3 +77,12 @@ def test_golden_vectors_cover_the_intended_paths() -> None:
     assert any(o.mode == AdcsMode.DETUMBLE for o in control.outputs)
     assert any(np.any(o.m_cmd != 0.0) for o in control.outputs)
     assert any(o.status & AdcsStatus.DIPOLE_SATURATED for o in control.outputs)
+
+
+def test_mekf_vectors_record_the_fault_detector() -> None:
+    def load(name: str) -> GoldenVector:
+        return GoldenVector.read(REPO / "testdata" / "golden" / "mekf" / f"{name}.json")
+
+    for name in ("gyro_bias", "mag_bias"):
+        assert any(o.status & AdcsStatus.BIAS_FAULT for o in load(name).outputs), name
+    assert not any(o.status & AdcsStatus.BIAS_FAULT for o in load("nominal").outputs)

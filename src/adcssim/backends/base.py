@@ -36,6 +36,7 @@ class AdcsStatus(IntFlag):
     COVARIANCE_RESET = 1 << 3
     DIPOLE_SATURATED = 1 << 4
     NOT_INITIALISED = 1 << 5
+    BIAS_FAULT = 1 << 6
 
 
 @dataclass(frozen=True)

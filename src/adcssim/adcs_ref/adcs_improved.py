@@ -128,6 +128,8 @@ class ImprovedAdcs:
         if not ok:
             status |= AdcsStatus.COVARIANCE_RESET
         self._detect_faults(sun_ok)
+        if self.fault != FAULT_NONE:
+            status |= AdcsStatus.BIAS_FAULT
         self.gyro_prev = gyro
         return self._finish(inp, status, gyro, mag_ut, mag_ok, None)
 

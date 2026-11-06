@@ -262,3 +262,27 @@ initialises within a degree and a detected fault inflates the attitude uncertain
 simpler code (no 9×9 Cholesky factorisation and no sigma points per step) and better
 behaviour from large errors. It is the stronger candidate for the flight implementation in
 C and Rust; the UKF stays in the Python reference as the documented comparison.
+
+## Scope of the C and Rust implementations
+
+Frozen on 2026-11-06 as `adcs.h` ABI version 3. The C and Rust libraries implement two of the
+three variants, selected with `adcs_config.variant`:
+
+| Variant | In C and Rust | Why |
+|---|---|---|
+| `thesis` (`ADCS_VARIANT_THESIS`) | yes | The original algorithm: the baseline the improvements are measured against, and the heaviest filter (13 + 6 states, 27 sigma points per stage), so the most informative for the C vs Rust benchmark |
+| `mekf` (`ADCS_VARIANT_MEKF`) | yes | The flight choice: the improved variant's accuracy at lower cost, simpler code, better behaviour from large errors ([MEKF baseline](#mekf-baseline)) |
+| `improved` (USQUE UKF) | no | Kept in Python as the documented comparison |
+
+What each implementation must reproduce, within the tolerances in `golden.py`:
+
+- `testdata/golden/thesis/`: 8 vectors recorded from the thesis variant. Frozen: they predate
+  the detumble scenario's move to 50 Hz dynamics and are not regenerated.
+- `testdata/golden/mekf/`: the same 8 situations (nominal, bad input, gyro- and
+  magnetometer-bias steps, eclipse entry, start in eclipse, high noise, control) with the
+  MEKF, its noise settings matched to each scenario's sensors.
+
+The control laws (B-dot, quaternion feedback, saturation, mode manager) are part of both
+variants and frozen as they are. Pointing with magnetorquers is not tuned (see "Control"
+above); improving it would change the control golden vectors, so it is left for after the
+ports, together with the magnetometer duty-cycle handling.

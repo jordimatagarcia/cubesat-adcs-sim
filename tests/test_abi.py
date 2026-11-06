@@ -93,3 +93,12 @@ def test_conversions_round_trip() -> None:
     out = output_from_c(out_c)
     np.testing.assert_array_equal(out.q_est, [0.0, 0.0, 0.0, 1.0])
     assert out.mode == 2 and out.status == 0x12 and out.p_diag.shape == (19,)
+
+
+def test_only_c_variants_convert() -> None:
+    from adcssim.backends.abi import VARIANT_IDS
+
+    assert config_to_c(AdcsConfig(variant="mekf"), 0.1, np.eye(3), np.ones(3)).variant == 1
+    assert VARIANT_IDS["thesis"] == 0
+    with pytest.raises(ValueError, match="not implemented"):
+        config_to_c(AdcsConfig(variant="improved"), 0.1, np.eye(3), np.ones(3))
