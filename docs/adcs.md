@@ -286,3 +286,67 @@ The control laws (B-dot, quaternion feedback, saturation, mode manager) are part
 variants and frozen as they are. Pointing with magnetorquers is not tuned (see "Control"
 above); improving it would change the control golden vectors, so it is left for after the
 ports, together with the magnetometer duty-cycle handling.
+
+## Input plausibility limits
+
+A sensor reading is used only if it is finite and inside a physical range; otherwise it is
+ignored and the step is flagged `BAD_INPUT`, the same as a NaN. An on-board reference vector
+outside its range is treated as unavailable.
+
+| Quantity | Accepted | Margin over the real values |
+|---|---|---|
+| Gyro rate norm | ≤ 50 rad/s | MEMS gyros saturate at about 35 rad/s |
+| Magnetometer reading and reference field norm | 0 < \|B\| ≤ 1 mT | The field in LEO stays below 70 µT |
+| Sun sensor reading and ephemeris direction norm | 0.5 to 2 | Both should be unit vectors |
+
+Added after fuzzing the C library: a finite but absurd gyro reading (−2·10¹⁶⁵ rad/s)
+overflowed the thesis filter's state, and normalising the quaternion by an infinite norm
+gave a finite all-zero quaternion that passed the filter's finiteness check. The limits are
+in all implementations (`adcs_ref/limits.py`), and a quaternion with a zero or overflowed
+norm now becomes NaN so the covariance-reset path catches it. Neither change affects the
+golden vectors.
+
+## The C library
+
+`adcs-c/` implements `adcs.h` for the `thesis` and `mekf` variants, as a line-by-line port
+of the Python reference.
+
+- **Flight-style C11.** No heap, no recursion, no variable-length arrays, no I/O. The caller
+  allocates the state (`adcs_state_size()` bytes: 36 KB in double precision, 18 KB in
+  float; almost all of it the thesis UKF's sigma points and matrices). Every temporary lives
+  in that state, so no function uses more than 1.3 KB of stack (checked with
+  `-Wstack-usage`). Only the four `adcs.h` functions are exported from the shared library.
+- **Precision.** `adcs_real` is `double`, or `float` with `-DADCS_USE_FLOAT`. The float
+  build compiles with `-Wdouble-promotion` so that no double arithmetic slips in.
+- **Linear algebra** is written for the purpose (`linalg.c`): fixed-size row-major matrices,
+  Cholesky, LU with partial pivoting, right division `B A⁻¹`. The filters use the same
+  factorisations as the NumPy reference.
+- **Configuration is validated** by `adcs_init` (positive periods and noise values,
+  invertible inertia, positive coil limits). `adcs_step` before a successful `adcs_init`
+  returns an error and `NOT_INITIALISED`.
+
+Verification:
+
+| Check | How |
+|---|---|
+| Matches the reference | All 16 golden vectors, by a C runner (`tests/golden_runner.c`, under ctest) and through the simulator's ctypes backend. Largest difference: 3·10⁻¹¹ (rad/s, MEKF gyro-bias case right after a fault inflates the covariance), elsewhere ~10⁻¹⁴. Tolerance 10⁻⁹. |
+| Closed loop | The same 60 s scenarios (B-dot detumbling, magnetometer-bias case, realistic sensors) with the Python and C backends give identical attitude, rate, commands, modes and status to 10⁻⁸ (`tests/test_native.py`). |
+| Memory and undefined behaviour | Unit and golden tests under AddressSanitizer and UndefinedBehaviorSanitizer, with GCC and Clang. |
+| Robustness | libFuzzer harness (`tests/fuzz_step.c`): arbitrary input sequences must never crash, the attitude must be unit-norm or NaN, and the dipole command finite and within the coil limits. 2 minutes per CI run. |
+| Static analysis | cppcheck (warning, style, performance, portability) for both precisions. |
+| Bare metal | `tools/cross_build.sh` builds `examples/bare_metal.c` for a Cortex-M4F (float) and a Cortex-M7 (double) with newlib's `nosys` stubs: about 23 KB (float) and 27 KB (double) of code, no `malloc`. |
+
+Speed, on the development PC (x86-64, one core): the C thesis variant takes about 20 µs per
+step and the MEKF about 2 µs, against 755 µs and 288 µs for the NumPy reference. Through
+the simulator's ctypes backend the C steps take 48 µs and 28 µs, most of it call overhead.
+Phase 7 benchmarks C against Rust properly.
+
+Running a scenario on the C library:
+
+```bash
+cmake -S adcs-c -B adcs-c/build -DCMAKE_BUILD_TYPE=Release && cmake --build adcs-c/build
+uv run adcssim run scenarios/case_1a.toml --backend c
+uv run adcssim view scenarios/detumble.toml --backend c
+```
+
+The backend loads `adcs-c/build/libadcs_c.so`, or the library named in `ADCSSIM_C_LIB`.

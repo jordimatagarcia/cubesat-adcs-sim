@@ -1,7 +1,7 @@
 # cubesat-adcs-sim
 
-> **Status: work in progress.** The simulator, the visualization and the reference ADCS (in
-> Python, thesis and improved variants) run. Next: the ADCS in C, then in Rust.
+> **Status: work in progress.** The simulator, the visualization, the reference ADCS in
+> Python and the ADCS in C run. Next: the ADCS in Rust, and the C vs Rust comparison.
 
 ![Viewer: thesis case 1a at 300× speed, entering eclipse](docs/images/viewer.gif)
 
@@ -31,6 +31,7 @@ The thesis test cases are in `scenarios/`, set up to run the reference ADCS:
 ```bash
 uv run adcssim run scenarios/case_1a.toml              # writes runs/case_1a_python-ref_<time>.parquet
 uv run adcssim run scenarios/case_1a.toml --backend none   # open loop, no ADCS
+uv run adcssim run scenarios/case_1a.toml --backend c      # the C library (build it first)
 uv run python tools/thesis_report.py                   # all cases → docs/results/thesis_cases.md
 ```
 
@@ -52,8 +53,14 @@ A reference implementation in NumPy (`src/adcssim/adcs_ref/`) with two variants:
   error.
 
 A multiplicative EKF on the same model matches the UKF's accuracy at lower cost
-([MEKF baseline](docs/adcs.md#mekf-baseline)). The C and Rust versions implement the same
-interface ([adcs.h](adcs-c/include/adcs.h)) and are tested against recorded golden vectors.
+([MEKF baseline](docs/adcs.md#mekf-baseline)).
+
+**In C** (`adcs-c/`), the thesis and MEKF variants behind one interface
+([adcs.h](adcs-c/include/adcs.h)): C11 with no heap, built for ARM Cortex-M as well as the
+PC, and verified against golden vectors recorded from the Python reference (agreement to
+~10⁻¹⁴), under sanitizers and a fuzzer. Any scenario, and the viewer, can run on it with
+`--backend c` ([details](docs/adcs.md#the-c-library)). The Rust version will implement the
+same interface.
 
 - [How both variants work, and where and why they differ from the thesis](docs/adcs.md)
 - [Thesis test cases](docs/results/thesis_cases.md) ·
@@ -96,7 +103,7 @@ uv sync                      # create the virtual environment
 uv run pre-commit install    # enable the commit hooks
 uv run pytest                # Python tests
 
-cmake -S adcs-c -B build/c && cmake --build build/c && ctest --test-dir build/c
+cmake -S adcs-c -B adcs-c/build && cmake --build adcs-c/build && ctest --test-dir adcs-c/build
 
 cargo test --manifest-path adcs-rs/Cargo.toml
 ```

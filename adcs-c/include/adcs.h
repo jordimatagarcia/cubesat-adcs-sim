@@ -19,6 +19,13 @@
 extern "C" {
 #endif
 
+/* Symbols exported from the shared library (everything else is hidden). */
+#if defined(ADCS_BUILDING_LIBRARY) && (defined(__GNUC__) || defined(__clang__))
+#define ADCS_API __attribute__((visibility("default")))
+#else
+#define ADCS_API
+#endif
+
 /* Version of this interface. Incremented on any change to the exported structs or functions. */
 #define ADCS_ABI_VERSION 3u
 
@@ -131,22 +138,23 @@ typedef struct {
     uint32_t status;        /* ADCS_STATUS_* flags */
 } adcs_output;
 
-/* Opaque state; the caller allocates adcs_state_size() bytes (no heap use inside). */
+/* Opaque state; the caller allocates adcs_state_size() bytes, aligned for any type (as
+ * malloc returns), and keeps them for the life of the ADCS. No heap use inside. */
 typedef struct adcs_state adcs_state;
 
 /* Returns ADCS_ABI_VERSION as compiled into the library. */
-uint32_t adcs_abi_version(void);
+ADCS_API uint32_t adcs_abi_version(void);
 
 /* Size in bytes of adcs_state. */
-size_t adcs_state_size(void);
+ADCS_API size_t adcs_state_size(void);
 
 /* Initialises the state from a configuration. Returns 0 on success, nonzero if the
  * configuration is invalid. */
-int adcs_init(adcs_state *state, const adcs_config *config);
+ADCS_API int adcs_init(adcs_state *state, const adcs_config *config);
 
 /* Processes one control period. Returns 0 on success, nonzero on a programming error
  * (null pointers, not initialised). Data problems are reported in out->status instead. */
-int adcs_step(adcs_state *state, const adcs_input *in, adcs_output *out);
+ADCS_API int adcs_step(adcs_state *state, const adcs_input *in, adcs_output *out);
 
 #ifdef __cplusplus
 }

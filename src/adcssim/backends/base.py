@@ -119,7 +119,7 @@ class NoAdcs:
         return AdcsOutput()
 
 
-BACKENDS = ("none", "python-ref")
+BACKENDS = ("none", "python-ref", "c", "rust")
 
 
 def create_backend(name: str) -> AdcsBackend:
@@ -130,4 +130,8 @@ def create_backend(name: str) -> AdcsBackend:
         from adcssim.adcs_ref.adcs import ReferenceAdcs
 
         return ReferenceAdcs()
+    if name in ("c", "rust"):
+        from adcssim.backends.native import NativeAdcs
+
+        return NativeAdcs(name)
     raise ValueError(f"unknown ADCS backend {name!r} (available: {', '.join(BACKENDS)})")

@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   build-test:
+    # Unit tests and all golden vectors, with and without sanitizers.
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -28,12 +29,52 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
+  float:
+    # Single-precision build: -Wdouble-promotion catches accidental double arithmetic.
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -S adcs-c -B build -DADCS_USE_FLOAT=ON -DADCS_BUILD_TESTS=OFF
+      - run: cmake --build build
+
+  cortex-m:
+    # Bare-metal cross builds (Cortex-M4F float, Cortex-M7 double): no heap, bounded stack.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - run: adcs-c/tools/cross_build.sh
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -S adcs-c -B build -DADCS_FUZZ=ON -DADCS_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - run: cmake --build build
+      - run: mkdir -p corpus && build/fuzz_step -max_total_time=120 -max_len=900 corpus
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash
+          path: crash-*
+
   static-analysis:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        precision: ["-UADCS_USE_FLOAT", "-DADCS_USE_FLOAT"]
     steps:
       - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install -y cppcheck
       - run: >
-          cppcheck --std=c11 --enable=warning,style,performance,portability
+          cppcheck --std=c11 ${{ matrix.precision }}
+          --enable=warning,style,performance,portability
           --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem
-          -I adcs-c/include adcs-c/src adcs-c/tests
+          -I adcs-c/include adcs-c/src adcs-c/tests adcs-c/examples

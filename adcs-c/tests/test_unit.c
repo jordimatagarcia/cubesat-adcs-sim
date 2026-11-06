@@ -1,0 +1,302 @@
+/* Unit tests of the building blocks: linear algebra, quaternions, FLAE, control laws, and
+ * the API's handling of misuse. The full algorithms are tested against the golden vectors
+ * (golden_runner.c). */
+#include <stdalign.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "adcs.h"
+#include "check.h"
+#include "control.h"
+#include "flae.h"
+#include "linalg.h"
+#include "quat.h"
+
+#define TOL 1e-12
+
+static void test_abi_version(void)
+{
+    CHECK(adcs_abi_version() == ADCS_ABI_VERSION);
+    CHECK(adcs_state_size() > 0);
+}
+
+static void test_mul_and_transpose(void)
+{
+    const adcs_real a[6] = {1, 2, 3, 4, 5, 6}; /* 2×3 */
+    const adcs_real b[6] = {7, 8, 9, 10, 11, 12}; /* 3×2 */
+    adcs_real c[4], bt[6], c2[4];
+    la_mul(2, 3, 2, a, b, c);
+    CHECK_NEAR(c[0], 58, 0);
+    CHECK_NEAR(c[1], 64, 0);
+    CHECK_NEAR(c[2], 139, 0);
+    CHECK_NEAR(c[3], 154, 0);
+    la_transpose(3, 2, b, bt);
+    la_mul_bt(2, 3, 2, a, bt, c2);
+    for (int i = 0; i < 4; i++) {
+        CHECK_NEAR(c2[i], c[i], 0);
+    }
+}
+
+/* A fixed symmetric positive definite 5×5 matrix */
+static void spd5(adcs_real p[25])
+{
+    adcs_real m[25];
+    for (int i = 0; i < 25; i++) {
+        m[i] = (adcs_real)((i * 37 % 11) - 5) / 7;
+    }
+    la_mul_bt(5, 5, 5, m, m, p);
+    for (size_t i = 0; i < 5; i++) {
+        LA_AT(p, 5, i, i) += 1;
+    }
+}
+
+static void test_cholesky(void)
+{
+    adcs_real p[25], l[25], llt[25];
+    spd5(p);
+    CHECK(la_cholesky(5, p, l) == 0);
+    la_mul_bt(5, 5, 5, l, l, llt);
+    for (int i = 0; i < 25; i++) {
+        CHECK_NEAR(llt[i], p[i], TOL);
+    }
+    for (size_t i = 0; i < 5; i++) {
+        for (size_t j = i + 1; j < 5; j++) {
+            CHECK(LA_AT(l, 5, i, j) == 0);
+        }
+    }
+    LA_AT(p, 5, 2, 2) = -1;
+    CHECK(la_cholesky(5, p, l) != 0);
+}
+
+static void test_solve_inverse_det(void)
+{
+    adcs_real p[25], inv[25], work[50], prod[25], x[25];
+    spd5(p);
+    CHECK(la_inverse(5, p, inv, work) == 0);
+    la_mul(5, 5, 5, p, inv, prod);
+    for (size_t i = 0; i < 5; i++) {
+        for (size_t j = 0; j < 5; j++) {
+            CHECK_NEAR(LA_AT(prod, 5, i, j), i == j ? 1 : 0, 1e-12);
+        }
+    }
+    /* right division: x·p = b */
+    const adcs_real b[10] = {1, 2, 3, 4, 5, -1, 0, 2, 0, 1};
+    CHECK(la_right_divide(2, 5, b, p, x, work) == 0);
+    la_mul(2, 5, 5, x, p, prod);
+    for (int i = 0; i < 10; i++) {
+        CHECK_NEAR(prod[i], b[i], 1e-12);
+    }
+    const adcs_real m3[9] = {2, -1, 0, 1, 3, 4, 0, 5, -2};
+    CHECK_NEAR(la_det(3, m3, work), -54, 1e-12);
+    const adcs_real singular[9] = {1, 2, 3, 2, 4, 6, 1, 0, 1};
+    CHECK(la_det(3, singular, work) == 0);
+    CHECK(la_inverse(3, singular, inv, work) != 0);
+}
+
+static void test_quaternions(void)
+{
+    /* 90° about z: A maps inertial x to body −y (frame rotation) */
+    const adcs_real s = (adcs_real)sqrt(0.5);
+    const adcs_real qz[4] = {0, 0, s, s};
+    const adcs_real x[3] = {1, 0, 0};
+    adcs_real v[3];
+    quat_rotate(qz, x, v);
+    CHECK_NEAR(v[0], 0, TOL);
+    CHECK_NEAR(v[1], -1, TOL);
+    CHECK_NEAR(v[2], 0, TOL);
+    /* A(q ⊗ p) = A(q) A(p) */
+    const adcs_real p[4] = {0.1, -0.3, 0.2, 0.927361849549570};
+    adcs_real qp[4], aq[9], ap[9], aqp[9], prod[9];
+    quat_mul(qz, p, qp);
+    quat_to_dcm(qz, aq);
+    quat_to_dcm(p, ap);
+    quat_to_dcm(qp, aqp);
+    la_mul(3, 3, 3, aq, ap, prod);
+    for (int i = 0; i < 9; i++) {
+        CHECK_NEAR(aqp[i], prod[i], 1e-12);
+    }
+    /* rate quaternion: 90°/s about z for 1 s */
+    const adcs_real w[3] = {0, 0, (adcs_real)(3.14159265358979323846 / 2)};
+    adcs_real r[4];
+    quat_from_rate(w, 1, r);
+    for (int i = 0; i < 4; i++) {
+        CHECK_NEAR(r[i], qz[i], TOL);
+    }
+    const adcs_real zero[3] = {0, 0, 0};
+    quat_from_rate(zero, 0.1, r);
+    CHECK(r[0] == 0 && r[1] == 0 && r[2] == 0 && r[3] == 1);
+}
+
+static void test_flae_recovers_attitude(void)
+{
+    adcs_real q[4] = {0.3, -0.5, 0.1, 0.8};
+    quat_normalize(q);
+    adcs_real ref[6] = {0.6, 0.8, 0, 0.2, -0.3, 0.9};
+    adcs_real n = v3_norm(&ref[3]);
+    for (int i = 3; i < 6; i++) {
+        ref[i] /= n;
+    }
+    adcs_real body[6];
+    quat_rotate(q, &ref[0], &body[0]);
+    quat_rotate(q, &ref[3], &body[3]);
+    const adcs_real weights[2] = {1, 1};
+    flae_result res;
+    CHECK(flae2(body, ref, weights, NULL, 1e-10, 20, &res) == 0);
+    for (int i = 0; i < 4; i++) {
+        CHECK_NEAR(res.q[i], q[i], 1e-9);
+    }
+    CHECK_NEAR(res.lambda_max, 1, 1e-9);
+    /* sign follows q_prev */
+    const adcs_real prev[4] = {-q[0], -q[1], -q[2], -q[3]};
+    CHECK(flae2(body, ref, weights, prev, 1e-10, 20, &res) == 0);
+    CHECK_NEAR(res.q[3], -q[3], 1e-9);
+}
+
+static void test_flae_scalar_part_near_zero(void)
+{
+    /* 180° rotation: q4 = 0, where fixing q4 = −1 (thesis) would divide by zero */
+    const adcs_real q[4] = {0, 0.6, 0.8, 0};
+    const adcs_real ref[6] = {1, 0, 0, 0, 0, 1};
+    adcs_real body[6];
+    quat_rotate(q, &ref[0], &body[0]);
+    quat_rotate(q, &ref[3], &body[3]);
+    const adcs_real weights[2] = {1, 1};
+    flae_result res;
+    CHECK(flae2(body, ref, weights, NULL, 1e-10, 20, &res) == 0);
+    const adcs_real d = fabs(res.q[0] * q[0] + res.q[1] * q[1] + res.q[2] * q[2] + res.q[3] * q[3]);
+    CHECK_NEAR(d, 1, 1e-9);
+}
+
+static void test_flae_rejects_degenerate_input(void)
+{
+    const adcs_real ref[6] = {1, 0, 0, 1, 0, 0};
+    const adcs_real weights[2] = {1, 1};
+    const adcs_real zero_weights[2] = {0, 0};
+    flae_result res;
+    CHECK(flae2(ref, ref, weights, NULL, 1e-10, 20, &res) != 0);
+    const adcs_real ok[6] = {1, 0, 0, 0, 1, 0};
+    CHECK(flae2(ok, ok, zero_weights, NULL, 1e-10, 20, &res) != 0);
+    CHECK(flae2(ok, ok, weights, NULL, 1e-10, 0, &res) != 0); /* no iterations allowed */
+}
+
+static void test_control_laws(void)
+{
+    const adcs_real q[4] = {0, 0, 0, 1};
+    const adcs_real target[4] = {0, 0, 0, 1};
+    const adcs_real w[3] = {0.1, 0, 0};
+    adcs_real tau[3];
+    control_quaternion_feedback(q, target, w, 1, 2, tau);
+    CHECK_NEAR(tau[0], -0.2, TOL);
+    /* the dipole produces the torque component perpendicular to B */
+    const adcs_real b[3] = {0, 0, 2e-5};
+    const adcs_real t_perp[3] = {1e-6, -2e-6, 0};
+    adcs_real m[3], produced[3];
+    control_torque_to_dipole(t_perp, b, m);
+    v3_cross(m, b, produced);
+    for (int i = 0; i < 3; i++) {
+        CHECK_NEAR(produced[i], t_perp[i], 1e-18);
+    }
+    const adcs_real max_dipole[3] = {0.1, 0.1, 0.05};
+    adcs_real big[3] = {0.2, 0.05, 0.05};
+    CHECK(control_saturate(big, max_dipole));
+    CHECK_NEAR(big[0], 0.1, TOL);
+    CHECK_NEAR(big[1], 0.025, TOL);
+    adcs_real small[3] = {0.01, 0, 0};
+    CHECK(!control_saturate(small, max_dipole));
+}
+
+static adcs_config valid_config(void)
+{
+    adcs_config c;
+    memset(&c, 0, sizeof c);
+    c.variant = ADCS_VARIANT_MEKF;
+    c.dt = 0.1;
+    c.process_dt = 0.1;
+    c.inertia[0] = c.inertia[4] = 0.04;
+    c.inertia[8] = 0.007;
+    c.max_dipole[0] = c.max_dipole[1] = c.max_dipole[2] = 0.1;
+    c.flae_weight_sun = c.flae_weight_mag = 1;
+    c.flae_tolerance = 1e-3;
+    c.flae_max_iterations = 20;
+    c.ukf_alpha = 1;
+    for (int i = 0; i < ADCS_NX; i++) {
+        c.p_x0[i] = c.v[i] = 1e-4;
+    }
+    for (int i = 0; i < ADCS_NB; i++) {
+        c.p_b0[i] = 1e-6;
+    }
+    c.sigma_mag_noise = 0.1;
+    c.sigma_sun_noise = 1e-3;
+    c.p0_attitude = c.p0_gyro_bias = c.p0_mag_bias = 0.1;
+    c.fault_nis_threshold = 25;
+    c.fault_steps = 3;
+    c.q_target[3] = 1;
+    return c;
+}
+
+static void test_api_misuse(void)
+{
+    void *mem = aligned_alloc(alignof(max_align_t), (adcs_state_size() + 15) / 16 * 16);
+    adcs_state *s = (adcs_state *)mem;
+    adcs_config c = valid_config();
+    adcs_input in;
+    adcs_output out;
+    memset(&in, 0, sizeof in);
+    memset(mem, 0, adcs_state_size());
+
+    CHECK(adcs_init(NULL, &c) != 0);
+    CHECK(adcs_init(s, NULL) != 0);
+    CHECK(adcs_step(s, &in, &out) != 0); /* never initialised */
+    CHECK(out.status == ADCS_STATUS_NOT_INITIALISED && out.mode == ADCS_MODE_OFF);
+    CHECK(isnan(out.q_est[0]));
+    CHECK(adcs_step(s, &in, NULL) != 0);
+
+    c.variant = 7;
+    CHECK(adcs_init(s, &c) != 0);
+    c = valid_config();
+    c.dt = (adcs_real)NAN;
+    CHECK(adcs_init(s, &c) != 0);
+    c = valid_config();
+    c.inertia[8] = 0;
+    CHECK(adcs_init(s, &c) != 0);
+    c = valid_config();
+    c.variant = ADCS_VARIANT_THESIS;
+    c.v[3] = 0;
+    CHECK(adcs_init(s, &c) != 0);
+    CHECK(adcs_step(s, &in, &out) != 0); /* a failed init leaves the state unusable */
+
+    for (uint32_t variant = 0; variant < 2; variant++) {
+        c = valid_config();
+        c.variant = variant;
+        CHECK(adcs_init(s, &c) == 0);
+        /* no valid data: no estimate, no crash */
+        CHECK(adcs_step(s, &in, &out) == 0);
+        CHECK(out.mode == ADCS_MODE_OFF);
+        CHECK(out.status & ADCS_STATUS_NO_ATTITUDE_FIX);
+        /* NaN everywhere, all marked valid */
+        for (int i = 0; i < 3; i++) {
+            in.mag_b[i] = in.gyro_b[i] = in.sun_b[i] = in.sun_ref_i[i] = in.mag_ref_i[i] = (adcs_real)NAN;
+        }
+        in.mag_valid = in.gyro_valid = in.sun_valid = true;
+        CHECK(adcs_step(s, &in, &out) == 0);
+        CHECK(out.status & ADCS_STATUS_BAD_INPUT);
+        memset(&in, 0, sizeof in);
+    }
+    free(mem);
+}
+
+int main(void)
+{
+    RUN(test_abi_version);
+    RUN(test_mul_and_transpose);
+    RUN(test_cholesky);
+    RUN(test_solve_inverse_det);
+    RUN(test_quaternions);
+    RUN(test_flae_recovers_attitude);
+    RUN(test_flae_scalar_part_near_zero);
+    RUN(test_flae_rejects_degenerate_input);
+    RUN(test_control_laws);
+    RUN(test_api_misuse);
+    return check_summary();
+}
