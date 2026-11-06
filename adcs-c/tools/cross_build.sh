@@ -5,7 +5,9 @@
 #   adcs-c/tools/cross_build.sh [out_dir]
 #
 # Needs arm-none-eabi-gcc with newlib (Ubuntu: gcc-arm-none-eabi libnewlib-arm-none-eabi).
-# EXTRA_CFLAGS / EXTRA_LDFLAGS are passed through (e.g. paths for a relocated toolchain).
+# OPT sets the optimisation flags (default -O2), STACK_LIMIT the per-function stack limit
+# in bytes (default 2048; an LTO build inlines everything into main). EXTRA_CFLAGS / EXTRA_LDFLAGS are passed
+# through (e.g. paths for a relocated toolchain).
 # The linker warns that newlib's nosys stubs (_close, _read, ...) always fail: the library
 # never calls them, they are only referenced from parts of libc it does not use.
 set -euo pipefail
@@ -25,9 +27,9 @@ for entry in "${targets[@]}"; do
     dir="$out/$name"
     rm -rf "$dir" && mkdir -p "$dir"
     # shellcheck disable=SC2086
-    (cd "$dir" && arm-none-eabi-gcc -std=c11 $flags -O2 -ffunction-sections -fdata-sections \
+    (cd "$dir" && arm-none-eabi-gcc -std=c11 $flags ${OPT:--O2} -ffunction-sections -fdata-sections \
         -fstack-usage -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion \
-        -Wdouble-promotion -Wshadow -Wvla -Wstack-usage=2048 ${EXTRA_CFLAGS:-} \
+        -Wdouble-promotion -Wshadow -Wvla -Wstack-usage=${STACK_LIMIT:-2048} ${EXTRA_CFLAGS:-} \
         -I"$here/include" "$here"/src/*.c "$here/examples/bare_metal.c" \
         --specs=nosys.specs -Wl,--gc-sections ${EXTRA_LDFLAGS:-} -lm -o bare_metal.elf)
     echo "== $name"

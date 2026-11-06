@@ -77,4 +77,4 @@ jobs:
           cppcheck --std=c11 ${{ matrix.precision }}
           --enable=warning,style,performance,portability
           --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem
-          -I adcs-c/include adcs-c/src adcs-c/tests adcs-c/examples
+          -I adcs-c/include adcs-c/src adcs-c/tests adcs-c/examples adcs-c/bench

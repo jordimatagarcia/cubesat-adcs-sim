@@ -75,7 +75,18 @@ if(ADCS_BUILD_TESTS)
     target_link_libraries(test_unit PRIVATE adcs_c_static)
     add_test(NAME unit COMMAND test_unit)
 
-    add_executable(golden_runner tests/golden_runner.c)
+    # Benchmark driver (tools/bench.sh links it against each library); built here so CI
+    # keeps it compiling.
+    find_package(Threads REQUIRED)
+    add_executable(bench bench/bench.c tests/golden_io.c)
+    target_compile_options(bench PRIVATE ${ADCS_WARNINGS})
+    target_include_directories(bench PRIVATE tests)
+    target_link_libraries(bench PRIVATE adcs_c_static Threads::Threads)
+    add_test(NAME bench_smoke COMMAND bench --label smoke --reps 1
+             ${CMAKE_CURRENT_SOURCE_DIR}/../testdata/golden/thesis/nominal.json
+             ${CMAKE_CURRENT_SOURCE_DIR}/../testdata/golden/mekf/nominal.json)
+
+    add_executable(golden_runner tests/golden_runner.c tests/golden_io.c)
     target_compile_options(golden_runner PRIVATE ${ADCS_WARNINGS})
     target_link_libraries(golden_runner PRIVATE adcs_c_static)
     # The golden tolerances are for double precision.

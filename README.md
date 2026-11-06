@@ -1,7 +1,7 @@
 # cubesat-adcs-sim
 
 > **Status: work in progress.** The simulator, the visualization, the reference ADCS in
-> Python and the ADCS in C and in Rust run. Next: the C vs Rust comparison.
+> Python and the ADCS in C and in Rust run, and the two are compared.
 
 ![Viewer: thesis case 1a at 300× speed, entering eclipse](docs/images/viewer.gif)
 
@@ -67,6 +67,18 @@ with no `unsafe` code, and a thin FFI crate that is the only place with `unsafe`
 the golden vectors like the C library, is checked with Miri and a fuzzer, and links into the
 same bare-metal C example for Cortex-M. Run it with `--backend rust`
 ([details](docs/adcs.md#the-rust-library)).
+
+**C vs Rust** ([full comparison](docs/results/c_vs_rust.md)), same driver and inputs for both:
+
+| | C | Rust |
+|---|---:|---:|
+| Time per step, thesis / MEKF (x86-64, best build) | 11.3 / 1.19 µs (gcc LTO) | 13.8 / 1.21 µs |
+| Outputs | bit-identical | bit-identical |
+| Code size, Cortex-M4F, size-optimised | 19 KB | 36 KB |
+| State / stack per step (double) | 36 KB / 2.5 KB | 42 KB / 5.9 KB |
+
+Speed is a draw (Rust matches clang, which shares its LLVM backend; gcc is fastest on the
+UKF); Rust costs memory and code size; the outputs are the same to the last bit.
 
 - [How both variants work, and where and why they differ from the thesis](docs/adcs.md)
 - [Thesis test cases](docs/results/thesis_cases.md) ·

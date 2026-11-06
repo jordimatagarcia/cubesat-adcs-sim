@@ -1,0 +1,9 @@
+{
+  "C -O2": {"cortex-m4f-float": 22852, "cortex-m7-double": 22780},
+  "C -Os": {"cortex-m4f-float": 20164, "cortex-m7-double": 20676},
+  "C -O2 -flto": {"cortex-m4f-float": 24768, "cortex-m7-double": 25092},
+  "C -Os -flto": {"cortex-m4f-float": 19016, "cortex-m7-double": 19508},
+  "Rust opt-level 2": {"cortex-m4f-float": 89988, "cortex-m7-double": 95352},
+  "Rust opt-level s": {"cortex-m4f-float": 35792, "cortex-m7-double": 38364},
+  "Rust opt-level z": {"cortex-m4f-float": 35344, "cortex-m7-double": 37720}
+}
