@@ -331,6 +331,7 @@ Verification:
 |---|---|
 | Matches the reference | All 16 golden vectors, by a C runner (`tests/golden_runner.c`, under ctest) and through the simulator's ctypes backend. Largest difference: 3·10⁻¹¹ (rad/s, MEKF gyro-bias case right after a fault inflates the covariance), elsewhere ~10⁻¹⁴. Tolerance 10⁻⁹. |
 | Closed loop | The same 60 s scenarios (B-dot detumbling, magnetometer-bias case, realistic sensors) with the Python and C backends give identical attitude, rate, commands, modes and status to 10⁻⁸ (`tests/test_native.py`). |
+| Full scenarios | `tools/crosscheck.py` runs all 10 scenarios to the end with both variants, Python and C. 19 of 20 runs agree to 2·10⁻¹⁰ or better over up to 114 000 closed-loop steps. The exception is detumble with the thesis variant: there the thesis filter repeatedly loses lock (errors up to 158°, see "Control" above) while its estimate drives the coils. Rounding differences grow smoothly from 10⁻¹² at 1556 s to 10⁻¹ at 8489 s with no discrete event (no reset or mode change) before they do, so this is sensitivity of a diverging closed loop rather than a porting error. |
 | Memory and undefined behaviour | Unit and golden tests under AddressSanitizer and UndefinedBehaviorSanitizer, with GCC and Clang. |
 | Robustness | libFuzzer harness (`tests/fuzz_step.c`): arbitrary input sequences must never crash, the attitude must be unit-norm or NaN, and the dipole command finite and within the coil limits. 2 minutes per CI run. |
 | Static analysis | cppcheck (warning, style, performance, portability) for both precisions. |
