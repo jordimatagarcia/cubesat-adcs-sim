@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from adcssim.backends import create_backend
-from adcssim.frames import quat_angle
+from adcssim.frames import quat_angle, quat_conj, quat_mul
 from adcssim.runner import Simulation
 from adcssim.scenario import load_scenario
 from adcssim.telemetry import Telemetry
@@ -59,9 +59,16 @@ def blocks(tel: Telemetry) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """(error, σ) per state block, in filter units, shape (N, k)."""
     p = _f(tel, "p_diag")
     q_est, q_true = _f(tel, "q_est"), _f(tel, "q_true")
-    sign = np.where(np.sum(q_est * q_true, axis=1, keepdims=True) < 0.0, -1.0, 1.0)
+    if np.all(np.isnan(p[:, 3])):
+        # Improved variant: covariance of the 3-axis attitude error (rad), δq = q ⊗ q̂⁻¹.
+        dq = quat_mul(q_true, quat_conj(q_est))
+        dq = np.where(dq[:, 3:] < 0.0, -dq, dq)
+        attitude = (2.0 * dq[:, :3], np.sqrt(p[:, 0:3]))
+    else:
+        sign = np.where(np.sum(q_est * q_true, axis=1, keepdims=True) < 0.0, -1.0, 1.0)
+        attitude = (q_est - sign * q_true, np.sqrt(p[:, 0:4]))
     return {
-        "q": (q_est - sign * q_true, np.sqrt(p[:, 0:4])),
+        "q": attitude,
         "ω (rad/s)": (_f(tel, "w_est") - _f(tel, "w_true"), np.sqrt(p[:, 10:13])),
         "mag bias (µT)": (
             (_f(tel, "bias_mag_est") - _f(tel, "mag_bias_true")) * UT,
@@ -122,7 +129,8 @@ def figure(res: dict[str, Any], tel: Telemetry, path: Path) -> None:
     # 1. attitude error, FLAE error and the filter's 3σ bound
     ax = axes[0]
     _, q_sig = b["q"]
-    bound = np.degrees(2.0 * 3.0 * np.linalg.norm(q_sig[:, :3], axis=1))  # ≈ 3σ angle
+    scale = 1.0 if q_sig.shape[1] == 3 else 2.0  # quaternion components: θ ≈ 2|δq_v|
+    bound = np.degrees(scale * 3.0 * np.linalg.norm(q_sig[:, :3], axis=1))  # ≈ 3σ angle
     ax.semilogy(t, np.maximum(flae_err, 1e-4), lw=0.4, color="#bbbbbb", label="FLAE measurement")
     ax.semilogy(t, np.maximum(est_err, 1e-4), lw=0.7, color="#1f5fa8", label="filter estimate")
     ax.semilogy(t, bound, lw=0.8, color="#d62728", ls="--", label="filter 3σ (approx.)")

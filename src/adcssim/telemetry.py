@@ -64,11 +64,14 @@ SCHEMA: dict[str, tuple[int, type]] = {
     "innov": (13, np.float64),
     "nis": (4, np.float64),
     "bias_gain": (6, np.float64),
+    "fault": (1, np.float64),
 }
-DIAGNOSTICS = ("q_flae", "flae_lambda", "innov", "nis", "bias_gain")
+DIAGNOSTICS = ("q_flae", "flae_lambda", "innov", "nis", "bias_gain", "fault")
 """Fields filled from ``AdcsOutput.diag``. ``nis`` is the normalised innovation squared of
 the q, sun, B and ω measurement groups (expected value = 4, 3, 3, 3 for a consistent
-filter); ``bias_gain`` is the row norm of the bias filter's gain per bias state."""
+filter); ``bias_gain`` is the row norm of the bias filter's gain per bias state; ``fault``
+is the bias fault declared this step by the improved variant (0 none, 1 gyro, 2
+magnetometer)."""
 
 _SUFFIXES = {3: ("x", "y", "z"), 4: ("1", "2", "3", "4")}
 

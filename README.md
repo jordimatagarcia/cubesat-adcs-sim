@@ -1,7 +1,7 @@
 # cubesat-adcs-sim
 
 > **Status: work in progress.** The simulator, the visualization and the reference ADCS (in
-> Python) run, and reproduce the thesis test cases. Next: the ADCS in C, then in Rust.
+> Python, thesis and improved variants) run. Next: the ADCS in C, then in Rust.
 
 ![Viewer: thesis case 1a at 300× speed, entering eclipse](docs/images/viewer.gif)
 
@@ -39,16 +39,25 @@ file.
 
 ## The ADCS
 
-A reference implementation of the thesis algorithms in NumPy (`src/adcssim/adcs_ref/`): the
-Fast Linear Quaternion Attitude Estimator (FLAE), a two-stage unscented Kalman filter that
-estimates the attitude, body rate and the magnetometer and gyroscope biases, B-dot
-detumbling and quaternion-feedback pointing. It reproduces the thesis results, including its
-open problem (the magnetometer bias is not estimated). The C and Rust versions implement the
-same interface ([adcs.h](adcs-c/include/adcs.h)) and are tested against recorded golden
-vectors from it.
+A reference implementation in NumPy (`src/adcssim/adcs_ref/`) with two variants:
 
-- [How it works, and where and why it differs from the thesis](docs/adcs.md)
-- [Results for the thesis test cases](docs/results/thesis_cases.md)
+- **thesis**: the thesis algorithms (the Fast Linear Quaternion Attitude Estimator, FLAE,
+  feeding a two-stage unscented Kalman filter, B-dot detumbling and quaternion-feedback
+  pointing). It reproduces the thesis results, including its open problem: the
+  magnetometer bias is not estimated.
+- **improved**: an error-state UKF (USQUE) designed from a measured diagnosis of the
+  thesis variant. It estimates the magnetometer bias the thesis couldn't (worst error in
+  that case 53° → 0.6°), stays accurate through eclipses with realistic sensors (8.6° →
+  0.43°) and while detumbling (diverged → 0.58°), and its uncertainty matches its real
+  error.
+
+The C and Rust versions implement the same interface ([adcs.h](adcs-c/include/adcs.h)) and
+are tested against recorded golden vectors.
+
+- [How both variants work, and where and why they differ from the thesis](docs/adcs.md)
+- [Thesis test cases](docs/results/thesis_cases.md) ·
+  [Diagnosis of the thesis variant](docs/results/diagnosis.md) ·
+  [Thesis vs improved](docs/results/variants.md)
 
 ## Visualization
 

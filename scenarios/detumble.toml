@@ -14,7 +14,7 @@ seed = 7
 [time]
 start_offset_s = 3816.0
 duration_s = 11400.0        # two orbits
-dt_dynamics_s = 0.1
+dt_dynamics_s = 0.02        # five steps per control period, so the 80% duty cycle acts
 dt_adcs_s = 0.1
 
 [orbit]

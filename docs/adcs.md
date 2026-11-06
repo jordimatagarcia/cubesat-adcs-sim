@@ -1,9 +1,18 @@
 # The ADCS: algorithms, implementation choices and findings
 
-This page describes the reference ADCS in `src/adcssim/adcs_ref/` (backend `python-ref`). The
-C and Rust implementations follow it exactly and are tested against its golden vectors
-(`testdata/golden/`). Results for the thesis test cases are in
-[results/thesis_cases.md](results/thesis_cases.md).
+The reference ADCS in `src/adcssim/adcs_ref/` (backend `python-ref`) has two variants,
+selected with `variant` in a scenario's `[adcs]` table:
+
+- **`thesis`** (default): the thesis algorithm, reproduced and frozen together with its
+  golden vectors (`testdata/golden/`) and results
+  ([results/thesis_cases.md](results/thesis_cases.md)). Described in the first half of this
+  page.
+- **`improved`**: an error-state UKF designed from a measured diagnosis of the thesis
+  variant ([results/diagnosis.md](results/diagnosis.md)). Described in
+  [The improved variant](#the-improved-variant); compared with the thesis variant in
+  [results/variants.md](results/variants.md).
+
+Both share the interface (`adcs-c/include/adcs.h`), the mode manager and the control laws.
 
 ## Structure
 
@@ -139,3 +148,79 @@ controllers:
 
 Both are on the Phase 8 list, together with the magnetometer-bias fix and a comparison
 against a multiplicative EKF.
+
+
+## The improved variant
+
+Designed from the [diagnosis](results/diagnosis.md) of the thesis variant: every change
+answers a measured problem.
+
+### Algorithm
+
+An error-state unscented filter, USQUE (Crassidis & Markley 2003; the thesis's reference
+[7] proposes it in §5.7), extended with a magnetometer bias:
+
+- **State (9):** attitude error as generalised Rodrigues parameters (3; equal to the
+  rotation angle vector for small errors) around a reference quaternion, gyro bias (3),
+  magnetometer bias (3, µT). The quaternion itself is never a UKF state, so its unit-norm
+  constraint can't break the filter's assumptions (thesis §5.7).
+- **Gyro as the rate input.** Each step propagates every sigma point's attitude with its
+  own bias-corrected rate, using the mean of the previous and current gyro readings. No
+  rigid-body dynamics are modelled, so unmodelled torques (control, duty cycle,
+  disturbances) cannot corrupt the estimate.
+- **Vector measurements.** `y_sun = A(q) s_i` and `y_B = A(q) B_i + b_mag`, compared with
+  the on-board ephemeris and field model. The magnetometer constrains the attitude directly
+  (two axes at any instant, all three as the field direction turns along the orbit), and
+  the magnetometer bias is observable because the sun sensor pins the attitude.
+- **FLAE** only initialises the attitude.
+- **Bias faults.** Both biases are slow random walks, so they don't absorb sensor noise.
+  Sudden faults (the thesis test cases) are caught by the innovations: when the sun or
+  magnetometer NIS stays above a threshold for a few steps in sunlight, the attitude and
+  both bias uncertainties are inflated and the measurements re-estimate them. Which sensor
+  failed isn't guessed, because a magnetometer-bias step also shows up in the sun
+  innovation once it has pulled the attitude.
+- **Noise settings** are matched to the scenario's sensors (`adcs_ref/tuning.py`), with
+  floors for the on-board reference models (0.1 µT for the field model, 2e-4 rad for the
+  ephemeris, 1e-5 rad/s for the gyro): a filter that trusted a 1 pT magnetometer
+  completely would let a bias step drag the attitude with it.
+
+### Results
+
+Full table and figures: [results/variants.md](results/variants.md) (`tools/compare_variants.py`).
+Worst attitude error in each scenario's hardest condition:
+
+| Scenario | Condition | Thesis variant | Improved variant |
+|---|---|---|---|
+| case 1a | eclipse | 3.8° | **0.01°** |
+| case 1b (fast tumble) | eclipse | 1.8° | **0.06°** |
+| case 2a | gyro bias 5 °/s step | **0.03°** | 1.7° |
+| case 2b | magnetometer bias 30 µT step | 53° | **0.6°** |
+| case 2c | both biases | 53° | **1.7°** |
+| case 4 (high noise) | eclipse | 5.6° | **3.5°** |
+| realistic_1a | eclipse, two orbits | 8.6° | **0.43°** |
+| detumble (control on) | eclipse | 180° (diverges) | **0.58°** |
+
+- The improved variant's error stays inside its own 3σ bound 99.8–100% of the time in
+  every scenario (thesis variant: 43–100%), so its covariance can be trusted, e.g. to
+  decide when pointing may start.
+- Gyro-bias estimates are 10–400× closer to the truth outside fault windows.
+- It costs about half the computation per step (0.5 vs 1.1 ms in Python).
+- **Where the thesis variant is better:** a sudden 5 °/s gyro-bias step (case 2a). Its
+  bias state absorbs every gyro innovation, so it follows a step instantly; the improved
+  variant takes about two seconds to detect the fault and re-estimate, peaking at 1.7°.
+  That is the price of a bias estimate that doesn't jitter with the sensor noise.
+
+### Two lessons from building it
+
+- **Classifying faults is fragile; inflating all the uncertainties is not.** The first
+  version declared a gyro fault when the sun innovation was high and a magnetometer fault
+  when only the magnetometer's was. A magnetometer-bias step pulls the attitude within a
+  step, so the sun innovation rose too: case 2b was misread 239 times as a gyro fault and
+  peaked at 22°. Inflating everything brought it to 0.7° with exactly two detections (onset
+  and removal).
+- **Holding the gyro rate constant over a step was the largest error source with good
+  sensors.** A tumbling body's rate changes within 0.1 s; holding the previous reading
+  left a systematic attitude error each step that the process noise didn't cover. The
+  filter was then badly overconfident (its error inside its 3σ bound only 21–35% of the
+  time in the thesis cases). Using the mean of the two readings removed it: case 1a went
+  from 0.12° to 0.01° worst-case error in sunlight, and the consistency to 100%.

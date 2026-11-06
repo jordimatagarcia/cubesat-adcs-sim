@@ -40,9 +40,11 @@ def _groups(groups: tuple[int, ...], *values: float) -> FloatArray:
     return np.repeat(np.array(values), groups)
 
 
-VARIANTS = ("thesis",)
+VARIANTS = ("thesis", "improved")
 """``thesis``: the algorithm as reproduced from the thesis (docs/adcs.md), frozen together
-with its golden vectors and results report. An improved variant is added next to it."""
+with its golden vectors and results report. ``improved``: the error-state UKF designed from
+the diagnosis (docs/results/diagnosis.md); its settings are the ``usque_*``, ``sigma_*``,
+``p0_*`` and ``fault_*`` fields below."""
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,37 @@ class AdcsConfig:
     w_x: FloatArray = field(default_factory=lambda: _groups(STATE_GROUPS, 1e-8, 1e-4, 2e-2, 1e-9))
     w_b: FloatArray = field(default_factory=lambda: _groups(BIAS_GROUPS, 1e-11, 1e-6))
     v: FloatArray = field(default_factory=lambda: _groups(STATE_GROUPS, 1e-4, 1e-2, 1.0, 5e-6))
+    # Improved variant: error-state UKF (USQUE, Crassidis & Markley 2003). Noise values are
+    # standard deviations of the sensors as seen by the filter, per control period.
+    usque_lambda: float = 1.0
+    """Sigma-point scaling λ (n + λ = 10 for the 9-state filter; all weights positive)."""
+    sigma_gyro_noise: float = 5e-4
+    """Gyro white noise per sample (rad/s)."""
+    sigma_gyro_bias_walk: float = 3e-6
+    """Gyro bias random walk (rad/s/√s)."""
+    sigma_mag_noise: float = 0.3
+    """Magnetometer noise (µT)."""
+    sigma_mag_bias_walk: float = 1e-3
+    """Magnetometer bias random walk (µT/√s)."""
+    sigma_sun_noise: float = 5e-3
+    """Sun sensor noise per vector component (rad)."""
+    p0_attitude: float = 0.05
+    """Initial attitude uncertainty after the FLAE initialisation (rad, per axis)."""
+    p0_gyro_bias: float = 5e-3
+    """Initial gyro bias uncertainty (rad/s)."""
+    p0_mag_bias: float = 2.0
+    """Initial magnetometer bias uncertainty (µT)."""
+    fault_nis_threshold: float = 25.0
+    """Per-step NIS of the sun or magnetometer measurement above which a bias fault is
+    suspected (χ²(3) at 99.99% is 21.1)."""
+    fault_steps: int = 3
+    """Consecutive suspect steps before the bias covariance is inflated."""
+    fault_gyro_bias_sigma: float = 0.1
+    """Gyro bias uncertainty (rad/s) after a detected fault."""
+    fault_mag_bias_sigma: float = 50.0
+    """Magnetometer bias uncertainty (µT) after a detected fault."""
+    fault_attitude_sigma: float = 0.05
+    """Attitude uncertainty (rad) after a detected gyro fault."""
     # Control
     control_enabled: bool = False
     bdot_gain: float = 4e4
@@ -88,6 +121,26 @@ class AdcsConfig:
         object.__setattr__(self, "q_target", q)
         if self.process_dt <= 0.0 or self.ukf_alpha <= 0.0 or self.flae_tolerance <= 0.0:
             raise ValueError("process_dt, ukf_alpha and flae_tolerance must be positive")
+        positive = (
+            "usque_lambda",
+            "sigma_gyro_noise",
+            "sigma_mag_noise",
+            "sigma_sun_noise",
+            "p0_attitude",
+            "p0_gyro_bias",
+            "p0_mag_bias",
+            "fault_nis_threshold",
+            "fault_gyro_bias_sigma",
+            "fault_mag_bias_sigma",
+            "fault_attitude_sigma",
+        )
+        for name in positive:
+            if not getattr(self, name) > 0.0:
+                raise ValueError(f"{name} must be positive")
+        if self.sigma_gyro_bias_walk < 0.0 or self.sigma_mag_bias_walk < 0.0:
+            raise ValueError("bias random walks must be non-negative")
+        if self.fault_steps < 1:
+            raise ValueError("fault_steps must be at least 1")
         if self.flae_max_iterations < 1:
             raise ValueError("flae_max_iterations must be at least 1")
         if self.flae_weight_sun < 0.0 or self.flae_weight_mag < 0.0:

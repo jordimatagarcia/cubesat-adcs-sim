@@ -25,7 +25,8 @@ Differences from the thesis, all documented in docs/adcs.md:
 import numpy as np
 from numpy.typing import NDArray
 
-from adcssim.adcs_ref.control import bdot, quaternion_feedback, saturate, torque_to_dipole
+from adcssim.adcs_ref.adcs_improved import ImprovedAdcs
+from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
 from adcssim.adcs_ref.tsukf import TwoStageUkf
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
@@ -132,8 +133,8 @@ def _finite(v: FloatArray) -> bool:
     return bool(np.all(np.isfinite(v)))
 
 
-class ReferenceAdcs:
-    """The ``python-ref`` backend."""
+class ThesisAdcs:
+    """The ``thesis`` variant of the ``python-ref`` backend."""
 
     name = "python-ref"
 
@@ -141,9 +142,8 @@ class ReferenceAdcs:
         self.ctx: AdcsContext | None = None
         self.filter: TwoStageUkf | None = None
         self.mode = AdcsMode.OFF
-        self.mode_time = 0.0
+        self.control = ModeController()
         self.m_prev = np.zeros(3)
-        self.b_prev: FloatArray | None = None
         self.last_flae_q: FloatArray | None = None
 
     @property
@@ -159,9 +159,8 @@ class ReferenceAdcs:
         self.inertia_inv = np.linalg.inv(self.inertia)
         self.filter = TwoStageUkf(fa, fs, cfg.w_x, cfg.w_b, cfg.v, cfg.ukf_alpha)
         self.mode = AdcsMode.ESTIMATE
-        self.mode_time = 0.0
+        self.control = ModeController()
         self.m_prev = np.zeros(3)
-        self.b_prev = None
         self.last_flae_q = None
         self.initialised = False
 
@@ -227,7 +226,7 @@ class ReferenceAdcs:
             x0 = np.concatenate([q_meas, sun_b, mag_ut, gyro])
             self.filter.reset(x0, cfg.p_x0, np.zeros(NB), cfg.p_b0)
             self.initialised = True
-            self.b_prev = None
+            self.control.b_prev = None
             return self._finish(inp, status)
 
         state = self.filter.state
@@ -262,41 +261,17 @@ class ReferenceAdcs:
     def _finish(self, inp: AdcsInput, status: AdcsStatus) -> AdcsOutput:
         """Mode manager and control law, after the estimate is updated."""
         assert self.ctx is not None and self.filter is not None and self.filter.state
-        cfg = self.config
         x = self.filter.state.x
-        w = x[W]
-        b_body = x[MAG] / UT
-        rate = float(np.linalg.norm(w))
-        dt = self.ctx.dt
-
-        if status & (AdcsStatus.BAD_INPUT | AdcsStatus.COVARIANCE_RESET):
-            mode = AdcsMode.SAFE
-        elif not cfg.control_enabled:
-            mode = AdcsMode.ESTIMATE
-        elif self.mode in (AdcsMode.ESTIMATE, AdcsMode.POINT, AdcsMode.SAFE, AdcsMode.OFF):
-            if rate > cfg.detumble_enter_rate:
-                mode = AdcsMode.DETUMBLE
-            elif self.mode == AdcsMode.POINT or (
-                self.mode == AdcsMode.ESTIMATE and self.mode_time >= cfg.settle_time
-            ):
-                mode = AdcsMode.POINT
-            else:
-                mode = AdcsMode.ESTIMATE
-        else:  # DETUMBLE
-            mode = AdcsMode.ESTIMATE if rate < cfg.detumble_exit_rate else AdcsMode.DETUMBLE
-        self.mode_time = self.mode_time + dt if mode == self.mode else 0.0
+        mode, m, status = self.control.update(
+            self.config,
+            self.ctx.dt,
+            np.asarray(self.ctx.max_dipole, dtype=np.float64),
+            x[Q],
+            x[W],
+            x[MAG] / UT,
+            status,
+        )
         self.mode = mode
-
-        m = np.zeros(3)
-        if mode == AdcsMode.DETUMBLE and self.b_prev is not None:
-            m = bdot((b_body - self.b_prev) / dt, cfg.bdot_gain)
-        elif mode == AdcsMode.POINT:
-            tau = quaternion_feedback(x[Q], cfg.q_target, w, cfg.kp, cfg.kd)
-            m = torque_to_dipole(tau, b_body)
-        m, saturated = saturate(m, np.asarray(self.ctx.max_dipole, dtype=np.float64))
-        if saturated:
-            status |= AdcsStatus.DIPOLE_SATURATED
-        self.b_prev = b_body
         self.m_prev = m
         return self._output(status, mode, m)
 
@@ -340,3 +315,21 @@ class ReferenceAdcs:
             status=int(status),
             diag=self._diagnostics(),
         )
+
+
+class ReferenceAdcs:
+    """The ``python-ref`` backend: runs the variant selected by ``AdcsConfig.variant``."""
+
+    name = "python-ref"
+
+    def __init__(self) -> None:
+        self.impl: ThesisAdcs | ImprovedAdcs | None = None
+
+    def reset(self, ctx: AdcsContext) -> None:
+        self.impl = ImprovedAdcs() if ctx.config.variant == "improved" else ThesisAdcs()
+        self.impl.reset(ctx)
+
+    def step(self, inp: AdcsInput) -> AdcsOutput:
+        if self.impl is None:
+            return AdcsOutput(status=int(AdcsStatus.NOT_INITIALISED))
+        return self.impl.step(inp)
