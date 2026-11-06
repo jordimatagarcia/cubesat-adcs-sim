@@ -114,7 +114,7 @@ Case 2b reproduces the thesis's main open problem: the magnetometer bias is neve
 The cause is the one the thesis identifies: FLAE uses the raw magnetometer, so the bias
 enters the attitude measurement directly and the filter has no way to separate it. Case 2c
 shows the side effect: the corrupted attitude also drags the gyro-bias estimate away.
-Fixing this is Phase 8.
+The improved variant below fixes it.
 
 ### Case 4 is worse than reported
 
@@ -148,8 +148,7 @@ controllers:
   eclipse, up to 87° in the second. With the near-ideal sensors of the thesis cases the same
   filter stays within 4°.
 
-Both are on the Phase 8 list, together with the magnetometer-bias fix and a comparison
-against a multiplicative EKF.
+The improved variant and the MEKF baseline below address both.
 
 
 ## The improved variant
@@ -225,7 +224,8 @@ Worst attitude error in each scenario's hardest condition:
   left a systematic attitude error each step that the process noise didn't cover. The
   filter was then badly overconfident (its error inside its 3σ bound only 21–35% of the
   time in the thesis cases). Using the mean of the two readings removed it: case 1a went
-  from 0.12° to 0.01° worst-case error in sunlight, and the consistency to 100%.
+  from 0.12° to 0.01° worst-case error in sunlight, and the share of errors inside 3σ to
+  100% (conservatively: see the README on calibration).
 
 ## MEKF baseline
 
@@ -314,8 +314,8 @@ of the Python reference.
 - **Flight-style C11.** No heap, no recursion, no variable-length arrays, no I/O. The caller
   allocates the state (`adcs_state_size()` bytes: 36 KB in double precision, 18 KB in
   float; almost all of it the thesis UKF's sigma points and matrices). Every temporary lives
-  in that state, so no function uses more than 1.3 KB of stack (checked with
-  `-Wstack-usage`). Only the four `adcs.h` functions are exported from the shared library.
+  in that state, so no function uses more than about 1.5 KB of stack (checked with
+  `-Wstack-usage`; a whole step, about 3 KB). Only the four `adcs.h` functions are exported from the shared library.
 - **Precision.** `adcs_real` is `double`, or `float` with `-DADCS_USE_FLOAT`. The float
   build compiles with `-Wdouble-promotion` so that no double arithmetic slips in.
 - **Linear algebra** is written for the purpose (`linalg.c`): fixed-size row-major matrices,
@@ -335,12 +335,12 @@ Verification:
 | Memory and undefined behaviour | Unit and golden tests under AddressSanitizer and UndefinedBehaviorSanitizer, with GCC and Clang. |
 | Robustness | libFuzzer harness (`tests/fuzz_step.c`): arbitrary input sequences must never crash, the attitude must be unit-norm or NaN, and the dipole command finite and within the coil limits. 2 minutes per CI run. |
 | Static analysis | cppcheck (warning, style, performance, portability) for both precisions. |
-| Bare metal | `tools/cross_build.sh` builds `examples/bare_metal.c` for a Cortex-M4F (float) and a Cortex-M7 (double) with newlib's `nosys` stubs: about 23 KB (float) and 27 KB (double) of code, no `malloc`. |
+| Bare metal | `tools/cross_build.sh` builds `examples/bare_metal.c` for a Cortex-M4F (float) and a Cortex-M7 (double) with newlib's `nosys` stubs: about 23 KB of code for either target at `-O2`, no `malloc`. |
 
 Speed, on the development PC (x86-64, one core): the C thesis variant takes about 20 µs per
 step and the MEKF about 2 µs, against 755 µs and 288 µs for the NumPy reference. Through
 the simulator's ctypes backend the C steps take 48 µs and 28 µs, most of it call overhead.
-Phase 7 benchmarks C against Rust properly.
+[c_vs_rust.md](results/c_vs_rust.md) compares C and Rust properly.
 
 Running a scenario on the C library:
 
@@ -357,7 +357,7 @@ The backend loads `adcs-c/build/libadcs_c.so`, or the library named in `ADCSSIM_
 `adcs-rs/` implements the same `adcs.h` interface, as a port of the C library: the same
 modules, algorithms and operation order (so both round the same way), with the
 hand-written linear algebra kept rather than replaced by a crate, so that the comparison
-in Phase 7 measures the languages and not the libraries.
+with C ([c_vs_rust.md](results/c_vs_rust.md)) measures the languages and not the libraries.
 
 - **`adcs-core`** holds the algorithms. It is `no_std`, has `#![forbid(unsafe_code)]`, and
   takes its maths functions from `libm`. `Adcs` can be used directly from Rust (for example
@@ -380,16 +380,16 @@ Verification:
 | Closed loop | The 60 s closed-loop scenarios in `tests/test_native.py` run against both libraries and match the Python reference to 10⁻⁸. |
 | Full scenarios | `tools/crosscheck.py` (all 10 scenarios, both variants, to the end): Rust differs from the Python reference exactly as much as C does. Rust and C agree bit for bit in 8 of the 10 thesis-variant runs, including detumble with the thesis variant over 114 000 steps, the one run where both drift from the Python reference: so that drift comes from NumPy's rounding, not from the ports. The remaining differences between Rust and C are at most 2·10⁻¹¹, almost all in the MEKF, which calls sine and cosine every step: Rust takes them from the `libm` crate, C from the system's maths library. |
 | Interface | A test compiles a C program against `adcs.h` and checks every struct size and field offset against the Rust structs, in both precisions. |
-| Undefined behaviour | Miri runs the unit tests, including the FFI crate's misuse tests (null and misaligned pointers, uninitialised state, invalid `bool` bytes). |
+| Undefined behaviour | Miri runs the unit tests, including the FFI crate's misuse tests (null and misaligned pointers, a zeroed never-initialised state, non-0/1 flag bytes); it does not exercise arbitrary garbage state. |
 | Robustness | The same libFuzzer harness as the C library (`fuzz/fuzz_targets/step.rs`), built with the stable toolchain and run with debug assertions and overflow checks, 2 minutes per CI run (`tools/fuzz.sh`). |
 | Lints | `clippy::pedantic` with warnings as errors, both precisions. |
-| Bare metal | `tools/cross_build.sh` builds the `no_std` static library for a Cortex-M4F (float) and a Cortex-M7 (double) and links the C example `examples/bare_metal.c` against it, unchanged: the Rust library is a drop-in replacement for the C one in firmware too. No `malloc`. |
+| Bare metal | `tools/cross_build.sh` builds the `no_std` static library for a Cortex-M4F (float) and a Cortex-M7 (double) and links the C example `examples/bare_metal.c` against it, unchanged. No `malloc`. The build is only linked, not run: in double precision the Rust state (41.8 KB) exceeds the example's 40 KB buffer, so `adcs_init` would refuse it (a review finding, to be fixed). |
 
 First look at code size: with the size-optimised `firmware` profile (`opt-level = "s"`) the
-firmware image has 36 KB of code (M4F) and 38 KB (M7), against 23 KB and 27 KB for the C
-library at `-O2`. At `opt-level = 2` it is 90–95 KB: LLVM unrolls the fixed-size 13×13
-loops of the UKF and keeps a bounds check in each. Phase 7 compares size and speed
-properly, at matching optimisation levels.
+firmware image has 36 KB of code (M4F) and 38 KB (M7), against about 20 KB for the C
+library at `-Os`. At `opt-level = 2` it is 90–95 KB: LLVM unrolls the fixed-size 13×13
+loops of the UKF. [c_vs_rust.md](results/c_vs_rust.md) compares size and speed at matching
+optimisation levels.
 
 ```bash
 cargo build --release --manifest-path adcs-rs/Cargo.toml

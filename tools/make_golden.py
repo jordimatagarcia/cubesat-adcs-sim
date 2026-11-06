@@ -4,9 +4,10 @@
     uv run python tools/make_golden.py thesis --force   # regenerate the frozen thesis set
 
 Each vector is a short (40 s at 10 Hz) closed-loop run of a thesis scenario with the event
-of interest moved near the start, so the files stay small while still covering every code
-path: nominal estimation, bias onsets, eclipse entry, starting in eclipse, high noise,
-control, and invalid inputs.
+of interest moved near the start, so the files stay small. They cover nominal estimation,
+bias onsets, eclipse entry, starting in eclipse, high noise, detumbling and invalid inputs;
+not yet POINT mode, FLAE failures, covariance resets, RK4 sub-stepping or
+implausible-but-finite inputs.
 
 Only rerun this after a deliberate change to the reference algorithms; the C and Rust
 implementations are tested against these files. The thesis set is frozen (it was recorded

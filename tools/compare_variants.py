@@ -149,7 +149,8 @@ def report(all_results: dict[str, dict[str, dict[str, Any]]]) -> str:
         "excluding the first 60 s and, except in the fault column, the bias-fault windows "
         "plus 30 s. "
         "*Within 3σ*: share of samples where the error is inside the filter's own 3σ bound "
-        "(a consistent filter: ~0.99). What the variants are: [../adcs.md](../adcs.md).",
+        "(a consistent filter: ~0.997; this share alone cannot reveal an "
+        "over-cautious filter, see the README). What the variants are: [../adcs.md](../adcs.md).",
         "",
         "| Scenario | Variant | Sunlit | Eclipse | Max in fault | Within 3σ "
         "| Gyro-bias RMS error (°/s) | ms/step |",

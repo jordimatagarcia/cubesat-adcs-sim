@@ -34,8 +34,9 @@ that diagnosis:
 | Eclipse with realistic sensors | 8.6° | 0.43° |
 | Detumbling | diverged | 0.58° |
 
-The improved filters' uncertainty also matches their real error
-([docs/results/variants.md](docs/results/variants.md)).
+Their uncertainty bounds the real error (it stays inside the filters' 3σ), but
+conservatively: the reported variance is 2–160× the actual squared error, so the filters
+are safe but not calibrated ([docs/results/variants.md](docs/results/variants.md)).
 
 **C vs Rust** ([full comparison](docs/results/c_vs_rust.md)), one benchmark driver and the
 same inputs for both:

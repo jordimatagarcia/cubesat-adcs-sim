@@ -88,11 +88,17 @@ for C and Rust):
 | high noise | 3.8 | 0.0002 |
 | control | 0.39 | 0.0001 |
 
-The thesis filter does not work in single precision: its tuning spans 10⁻¹² (magnetometer
-bias variance) to 10¹² (unavailable-measurement variance), more than a float can hold
-together. The MEKF stays within 0.005° except briefly after a declared bias fault (0.4°).
+**Correction (after a later code review):** the thesis-filter numbers above come from a
+porting bug, not from single precision itself. Before every Cholesky factorisation the
+filter adds machine epsilon to the covariance diagonal; in float that is 1.2·10⁻⁷, larger
+than the process noise on ω (10⁻⁹) and q (10⁻⁸), so it acts as extra process noise. With
+the double-precision value (2.2·10⁻¹⁶) the float thesis filter stays within **0.003°** of
+the double reference on every vector. The bug is in both the C and the Rust port and will
+be fixed with the other review findings; this section will then be re-measured.
+
+The MEKF stays within 0.005° except briefly after a declared bias fault (0.4°).
 This matters on a Cortex-M4F, whose FPU is single precision only (double is emulated in
-software): there, the MEKF is the variant to fly. On this x86 CPU float is only 3–20%
+software): there, single precision is usable for both filters once the bug is fixed. On this x86 CPU float is only 3–20%
 faster.
 
 ## Memory
@@ -111,8 +117,9 @@ the driver's own frame). Rust uses more memory:
 - **State, +16%:** the C state keeps the two filters in a `union`; the Rust `Adcs` keeps
   both (an `enum` would match C, at the cost of reconstructing it on every `init`).
 - **Stack, about 2× per step:** Rust inlines more aggressively, which grows the step's
-  frames. The double-precision `adcs_init` uses 8 KB, probably for a temporary while
-  writing the 42 KB state (not investigated further).
+  frames. The double-precision `adcs_init` uses 8 KB: because `Mekf::ZERO` holds a
+  non-zero quaternion, LLVM copies that 8 KB constant through a stack temporary instead of
+  writing it in place (found in review; an all-zero constant brings it to 168 B).
 
 ## Code size on Cortex-M
 
@@ -173,7 +180,7 @@ the FFI boundary, and test tolerances that work in both precisions.
 2. **Results are bit-identical** across languages, compilers and optimisation levels.
 3. **Rust costs memory:** about 1.8–1.9× the code size when optimised for size, 2× the stack per
    step and 16% more state, all small in absolute terms for a CubeSat computer.
-4. **Precision matters more than language:** the thesis filter fails in single precision in
-   both, the MEKF works in both.
+4. **Single precision behaves the same in both languages.** An apparent failure of the
+   thesis filter in float turned out to be a shared porting bug (see "Single precision").
 5. **Not measured:** timing on a real Cortex-M (no board), per-stage timing, and a third
    implementation using `nalgebra`.
