@@ -213,3 +213,15 @@ def test_live_source_close_stops_the_process() -> None:
     time.sleep(0.5)
     src.close()
     assert not src._proc.is_alive()
+
+
+def test_live_source_reports_a_crashed_process() -> None:
+    src = LiveSource(scenario(3000.0), speed=10.0)
+    try:
+        src._proc.kill()
+        src._proc.join(timeout=5.0)
+        assert src.error is not None
+        assert "exited unexpectedly" in str(src.error)
+        assert src.finished
+    finally:
+        src.close()

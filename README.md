@@ -139,7 +139,8 @@ uv run adcssim run scenarios/case_1a.toml --backend rust --variant mekf --seed 3
 ```
 
 The scenario files are never modified; overrides are recorded in the log's metadata
-(backend, variant, seed, duration) and shown in the viewer's *Scenario* tab. The choices
+(backend, variant, seed, duration, together with the ADCS configuration, git commit and
+library used) and shown in the viewer's *Scenario* tab. The choices
 made in the launcher are remembered between sessions.
 
 ## Visualization

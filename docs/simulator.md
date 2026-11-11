@@ -51,10 +51,37 @@ and run in CI.
   day/night variation. Drag torque is tiny for a CubeSat with its centre of pressure near the
   centre of mass, so this affects nothing the ADCS could see.
 - **Generic spacecraft:** a uniform 4 kg 3U box. Foresail-1's mass properties aren't
-  published.
+  published. A scenario that sets `mass_kg` without an inertia gets the inertia of a uniform
+  3U box of that mass.
 - **Environment held constant over one dynamics step** (0.1 s), while attitude-dependent
-  torques are re-evaluated in every RK4 stage.
+  torques are re-evaluated in every RK4 stage. It does not depend on the attitude, so it is
+  evaluated 64 control periods at a time, with one IGRF epoch per batch (the field's secular
+  variation over a batch is far below a nanotesla).
+- **Coils switch exactly at the duty-cycle boundary.** A dynamics step that straddles the
+  switch-off time is split there into two RK4 steps, so the magnetic impulse is exact for
+  any duty cycle, not rounded to whole dynamics steps.
 - **Sensors sample at the start of each control period.** No sensor latency or filtering.
+- **Faults stop the run instead of corrupting it.** A non-finite coil command is applied as
+  zero dipole (a real driver can't produce NaN amps), and a non-finite true attitude or rate
+  ends the run with an error rather than writing NaN telemetry.
+- **Runs must lie within the IGRF model's validity** (1900 to five years after the last
+  epoch); this is checked before the run starts.
+
+## Scenario validation
+
+Scenario files are checked when loaded, and overrides (such as `--duration`) are checked
+the same way: unknown keys, non-finite numbers, a zero initial quaternion, negative noise,
+drag or reflectivity coefficients, a sun-sensor half field of view outside (0°, 180°], a
+non-positive mass, and run lengths that aren't a whole number of control periods (which
+were previously rounded silently) are all errors. The name may only contain letters,
+digits, `_`, `-` and `.`, because it becomes part of the log file name.
+
+## Run metadata
+
+Every log records what produced it: the scenario file's text and name, the backend, the
+ADCS variant and its full configuration (as JSON), the seed, duration and time steps, the
+start time, the simulator version, the git commit of the source tree (with `+dirty` if it
+had local changes), and for the C and Rust backends the path of the library loaded.
 
 ## Reproducing the thesis cases
 

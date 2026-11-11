@@ -9,10 +9,14 @@ Each call to :meth:`Simulation.step` runs one ADCS control period:
    RK4 stage.
 """
 
+import dataclasses
+import json
+import subprocess
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import cache
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -20,6 +24,7 @@ from numpy.typing import NDArray
 from adcssim import __version__
 from adcssim.actuators import magnetic_torque
 from adcssim.backends import AdcsBackend, AdcsContext, AdcsInput, AdcsOutput, create_backend
+from adcssim.backends.native import LIBRARIES, library_path
 from adcssim.dynamics import rk4_step
 from adcssim.environment import Environment, EnvironmentSample
 from adcssim.frames import quat_angle, quat_to_dcm
@@ -29,6 +34,10 @@ from adcssim.telemetry import DIAGNOSTICS, SCHEMA, Telemetry, TelemetryRecorder
 from adcssim.timebase import Clock
 
 FloatArray = NDArray[np.float64]
+
+
+ENV_BATCH_PERIODS = 64
+"""Control periods of environment evaluated per batch (see ``Simulation._environment``)."""
 
 
 @cache
@@ -139,6 +148,15 @@ class Simulation:
         self.w = scenario.w0.copy()
         self.k = 0
         self._inertia_inv = np.linalg.inv(scenario.spacecraft.inertia)
+        self._env_batch: EnvironmentSample | None = None
+        self._env_first = -1
+        lo, hi = self.env.igrf.valid_range
+        years = (self.clock.decimal_year(0.0), self.clock.decimal_year(scenario.duration_s))
+        if not (lo <= years[0] and years[1] <= hi):
+            raise ValueError(
+                f"the run ({years[0]:.2f}–{years[1]:.2f}) is outside the IGRF model's range "
+                f"({lo:.1f}–{hi:.1f}); change time.start"
+            )
 
     @property
     def t(self) -> float:
@@ -155,7 +173,7 @@ class Simulation:
         sc = self.scenario
         dt = sc.dt_dynamics_s
         t = self.t
-        env = self.env.evaluate(t + np.arange(sc.substeps) * dt)
+        env = self._environment(self.k)
         env0 = env.at(0)
 
         a = quat_to_dcm(self.q)
@@ -211,18 +229,56 @@ class Simulation:
             compute_time_s=compute_time,
         )
 
+        # The coils switch off at t_off into the period. A substep that straddles t_off is
+        # split there, so the applied impulse is exact for any duty cycle, not rounded to whole
+        # substeps. The environment is held at the substep's start either way.
+        t_off = sc.actuators.on_time(sc.dt_adcs_s)
+        off = np.zeros(3)
         for j in range(sc.substeps):
-            m = m_applied if sc.actuators.active(j * dt, sc.dt_adcs_s) else np.zeros(3)
-            self.q, self.w = rk4_step(
-                self.q,
-                self.w,
-                dt,
-                sc.spacecraft.inertia,
-                self._torque_fn(env, j, m),
-                self._inertia_inv,
+            t0 = j * dt
+            on_part = min(max(t_off - t0, 0.0), dt)
+            if on_part < 1e-12 * dt:
+                pieces = [(dt, off)]
+            elif dt - on_part < 1e-12 * dt:
+                pieces = [(dt, m_applied)]
+            else:
+                pieces = [(on_part, m_applied), (dt - on_part, off)]
+            for h, m in pieces:
+                self.q, self.w = rk4_step(
+                    self.q,
+                    self.w,
+                    h,
+                    sc.spacecraft.inertia,
+                    self._torque_fn(env, j, m),
+                    self._inertia_inv,
+                )
+        if not (np.all(np.isfinite(self.q)) and np.all(np.isfinite(self.w))):
+            raise FloatingPointError(
+                f"the true attitude became non-finite at t = {t + sc.dt_adcs_s:g} s "
+                f"(|w| was {float(np.linalg.norm(frame.w_true)):.3g} rad/s at t = {t:g} s)"
             )
         self.k += 1
         return frame
+
+    def _environment(self, k: int) -> EnvironmentSample:
+        """Environment at the substep starts of control period ``k``.
+
+        The environment does not depend on the attitude, so it is evaluated for
+        ``ENV_BATCH_PERIODS`` periods at a time (the IGRF sum is the costly part, and its
+        per-call overhead dominates for a single period's handful of points). Batches are
+        aligned to absolute period numbers, so the result does not depend on where a run was
+        resumed or stepped from.
+        """
+        sc = self.scenario
+        n = sc.substeps
+        first = (k // ENV_BATCH_PERIODS) * ENV_BATCH_PERIODS
+        if self._env_batch is None or self._env_first != first:
+            last = min(first + ENV_BATCH_PERIODS, sc.steps)
+            idx = np.arange(first * n, last * n)
+            self._env_batch = self.env.evaluate(idx * sc.dt_dynamics_s)
+            self._env_first = first
+        start = (k - first) * n
+        return self._env_batch.slice(start, start + n)
 
     def _torque_fn(
         self, env: EnvironmentSample, j: int, m: FloatArray
@@ -276,4 +332,50 @@ def run_metadata(sc: Scenario, backend_name: str) -> dict[str, str]:
         "start_utc": sc.start.isoformat(),
         "dt_adcs_s": repr(sc.dt_adcs_s),
         "dt_dynamics_s": repr(sc.dt_dynamics_s),
+        "adcs_config": json.dumps(dataclasses.asdict(sc.adcs), sort_keys=True, default=_jsonable),
+        "git_commit": _git_commit(),
+        "library": _library(backend_name),
     }
+
+
+@cache
+def _git_commit() -> str:
+    """Commit of the source tree the simulator runs from ("+dirty" if it has local changes),
+    or "" when it is not a git checkout (e.g. an installed wheel)."""
+    root = Path(__file__).resolve().parents[2]
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return head + ("+dirty" if dirty else "")
+
+
+def _library(backend_name: str) -> str:
+    """Path of the compiled library a native backend loads, or "" for the Python backend."""
+    if backend_name not in LIBRARIES:
+        return ""
+    try:
+        return str(library_path(backend_name).resolve())
+    except ValueError:
+        return ""
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")

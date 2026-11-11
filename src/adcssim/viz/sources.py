@@ -4,6 +4,7 @@ Both sources produce telemetry rows (the dictionaries of :meth:`Frame.telemetry_
 ``gmst``, paced by a playback speed (simulated seconds per wall-clock second).
 """
 
+import contextlib
 import math
 import multiprocessing as mp
 import queue
@@ -149,7 +150,9 @@ class LiveSource:
 
     def _send(self, *command: Any) -> None:
         if self._proc.is_alive():
-            self._commands.send(command)
+            # the process may exit between the check and the send
+            with contextlib.suppress(OSError):
+                self._commands.send(command)
 
     def play(self) -> None:
         self._playing = True
@@ -163,10 +166,20 @@ class LiveSource:
         self._send("speed", speed)
 
     def _drain(self) -> None:
+        # Checked before draining: a process that had already exited has flushed everything
+        # it sent, so an empty queue then means it died without reporting (a crash in a native
+        # library, or killed), not that its last message is still in flight.
+        exited = not self._proc.is_alive()
         while True:
             try:
                 kind, payload = self._out.get_nowait()
             except queue.Empty:
+                if exited and not self._done:
+                    self._error = RuntimeError(
+                        "the simulation process exited unexpectedly "
+                        f"(exit code {self._proc.exitcode})"
+                    )
+                    self._done = True
                 return
             if kind == "rows":
                 self._pending.extend(payload)

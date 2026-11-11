@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,19 @@ def test_orbit_from_elements_and_explicit_start() -> None:
         (minimal(adcs={"kpp": 1.0}), "adcs.kpp"),
         (minimal(adcs={"v": [1.0, 2.0]}), "group values"),
         (minimal(adcs={"q_target": [1.0, 1.0, 0.0, 0.0]}), "unit quaternion"),
+        (minimal(time={"duration_s": 10.5}), "whole number of control periods"),
+        (minimal(time={"duration_s": 0.5}), "whole number of control periods"),
+        (minimal(time={"duration_s": 10.0, "dt_dynamics_s": 2.0}), "multiple"),
+        (minimal(time={"duration_s": float("inf")}), "finite"),
+        (minimal(name="../escape"), "name"),
+        (minimal(initial={"quaternion": [0.0, 0.0, 0.0, 0.0]}), "must not be zero"),
+        (minimal(initial={"rate_deg_s": [1.0, float("nan"), 0.0]}), "finite"),
+        (minimal(spacecraft={"mass_kg": 0.0}), "mass_kg"),
+        (minimal(spacecraft={"drag_coefficient": -2.2}), "negative"),
+        (minimal(sensors={"magnetometer": {"noise_std_nT": -1.0}}), "negative"),
+        (minimal(sensors={"gyroscope": {"bias_walk_deg_s_sqrt_s": -1.0}}), "negative"),
+        (minimal(sensors={"sun": {"half_fov_deg": 0.0}}), "half_fov_deg"),
+        (minimal(sensors={"sun": {"half_fov_deg": 200.0}}), "half_fov_deg"),
     ],
 )
 def test_invalid_scenarios_are_rejected(data: dict[str, Any], message: str) -> None:
@@ -125,3 +139,15 @@ def test_load_reports_file_name(tmp_path: Path) -> None:
     bad.write_text('name = "x"\n[time\n', encoding="utf-8")
     with pytest.raises(ScenarioError, match=r"bad\.toml"):
         load_scenario(bad)
+
+
+def test_mass_without_inertia_gives_a_uniform_box() -> None:
+    light = parse(minimal(spacecraft={"mass_kg": 2.0}))
+    default = parse(minimal())
+    np.testing.assert_allclose(light.spacecraft.inertia, 0.5 * default.spacecraft.inertia)
+
+
+def test_duration_override_is_validated() -> None:
+    sc = parse(minimal())
+    with pytest.raises(ScenarioError, match="whole number"):
+        replace(sc, duration_s=10.3)

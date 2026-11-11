@@ -2,6 +2,7 @@
 
 import math
 import sys
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,8 +36,10 @@ from adcssim.viz.sources import LiveSource, ReplaySource, Source
 SPEEDS = (1, 5, 10, 30, 60, 120, 300, math.inf)
 """Playback speeds. "max" runs the simulation as fast as it can (about 270× on one core)."""
 UI_INTERVAL_MS = 33
-PLOT_EVERY = 3
-"""Redraw the 2D plots every n-th UI tick (~10 Hz): they cost far more than the 3D view."""
+PLOT_INTERVAL_S = 0.1
+"""Redraw the 2D plots at most every 0.1 s of wall time (~10 Hz): they cost far more than the
+3D view. Time-based, not every n-th tick, so they keep updating at low speeds, where only some
+ticks bring new rows."""
 RECORD_EVERY = 3
 HISTORY_S = 6000.0
 """Seconds of history kept for plots and tracks: a bit more than one orbit."""
@@ -57,6 +60,7 @@ class MainWindow(QMainWindow):
         self.backend = source.metadata.get("backend", "none")
         self.history = History(capacity=max(4, round(HISTORY_S / self.dt)))
         self._ticks = 0
+        self._last_plot = -math.inf
         self._prediction_t = -math.inf
         self.recorder: GifRecorder | None = None
         self.setWindowTitle(f"adcssim · {title}")
@@ -183,6 +187,10 @@ class MainWindow(QMainWindow):
         if rows:
             self.history.extend(rows)
             self.refresh()
+        # Captured on the UI clock, whether or not rows arrived, so a GIF plays back at the
+        # speed it was watched.
+        if self.recorder is not None and self.source.playing and self._ticks % RECORD_EVERY == 0:
+            self.recorder.capture()
         if self.source.finished and self.source.playing:
             self.source.pause()
             self.play_button.setText("▶ Play")
@@ -218,7 +226,9 @@ class MainWindow(QMainWindow):
         )
         self.scene.render()
 
-        if force_plots or self._ticks % PLOT_EVERY == 0:
+        now = time.monotonic()
+        if force_plots or now - self._last_plot >= PLOT_INTERVAL_S:
+            self._last_plot = now
             # Readouts refresh with the plots: every label change repaints the whole panel.
             self.sensors.update_readouts(h)
             k = round(5700 / self.dt)
@@ -232,8 +242,6 @@ class MainWindow(QMainWindow):
                 self.sensors.update_plots(h, self.dt)
             elif self.tabs.currentWidget() is self.adcs:
                 self.adcs.refresh(h, self.backend, self.sensors.window_s, self.dt)
-        if self.recorder is not None and self._ticks % RECORD_EVERY == 0:
-            self.recorder.capture()
 
     def _update_prediction(self, t: float) -> None:
         """Refresh the next-orbit track when the source has a new one (live: every 60 s of

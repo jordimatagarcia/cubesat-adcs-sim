@@ -26,6 +26,7 @@ Example (see ``scenarios/`` for complete files)::
 """
 
 import math
+import re
 import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -52,7 +53,7 @@ from adcssim.sensors import (
     SensorErrors,
     SunSensorModel,
 )
-from adcssim.spacecraft import Spacecraft
+from adcssim.spacecraft import Spacecraft, box_inertia
 
 FloatArray = NDArray[np.float64]
 NT = 1e-9
@@ -60,6 +61,10 @@ NT = 1e-9
 
 class ScenarioError(ValueError):
     """The scenario file is invalid."""
+
+
+NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+"""Scenario names: they become part of the log file name, so no path separators."""
 
 
 class _Table:
@@ -89,7 +94,15 @@ class _Table:
         value = self.get(key, default) if default is not None else self.require(key)
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise ScenarioError(f"'{self._where(key)}' must be a number")
+        if not math.isfinite(value):
+            raise ScenarioError(f"'{self._where(key)}' must be finite")
         return float(value)
+
+    def nonnegative(self, key: str, default: float) -> float:
+        value = self.number(key, default)
+        if value < 0.0:
+            raise ScenarioError(f"'{self._where(key)}' must not be negative")
+        return value
 
     def flag(self, key: str, default: bool) -> bool:
         value = self.get(key, default)
@@ -105,6 +118,8 @@ class _Table:
             raise ScenarioError(f"'{self._where(key)}' must be a list of numbers") from None
         if arr.shape != (size,):
             raise ScenarioError(f"'{self._where(key)}' must have {size} values")
+        if not np.all(np.isfinite(arr)):
+            raise ScenarioError(f"'{self._where(key)}' must be finite")
         return arr
 
     def table(self, key: str) -> "_Table":
@@ -155,6 +170,26 @@ class Scenario:
     """Raw sensor tables; :meth:`make_sensors` builds fresh (stateful) models from them."""
     source: str = field(default="", repr=False)
     """The TOML text the scenario was loaded from."""
+
+    def __post_init__(self) -> None:
+        # Checked here, not only when parsing, so overrides (dataclasses.replace, e.g. the
+        # CLI's --duration) are checked too.
+        if not NAME_PATTERN.fullmatch(self.name):
+            raise ScenarioError(
+                f"name {self.name!r} must be letters, digits, '_', '-' or '.' (it names the log)"
+            )
+        times = (self.duration_s, self.dt_dynamics_s, self.dt_adcs_s)
+        if not all(math.isfinite(x) and x > 0 for x in times):
+            raise ScenarioError("durations and time steps must be positive")
+        sub = self.dt_adcs_s / self.dt_dynamics_s
+        if sub < 1 - 1e-9 or abs(sub - round(sub)) > 1e-9:
+            raise ScenarioError("time.dt_adcs_s must be a whole multiple of time.dt_dynamics_s")
+        periods = self.duration_s / self.dt_adcs_s
+        if periods < 1 - 1e-9 or abs(periods - round(periods)) > 1e-6:
+            raise ScenarioError(
+                f"the duration ({self.duration_s:g} s) must be a whole number of control "
+                f"periods (time.dt_adcs_s = {self.dt_adcs_s:g} s)"
+            )
 
     @property
     def steps(self) -> int:
@@ -215,15 +250,13 @@ def parse_scenario(data: dict[str, Any], base_dir: Path, source: str = "") -> Sc
     duration = time_t.number("duration_s")
     dt_dyn = time_t.number("dt_dynamics_s", 0.1)
     dt_adcs = time_t.number("dt_adcs_s", 1.0)
-    if duration <= 0 or dt_dyn <= 0 or dt_adcs <= 0:
-        raise ScenarioError("durations and time steps must be positive")
-    ratio = dt_adcs / dt_dyn
-    if abs(ratio - round(ratio)) > 1e-9:
-        raise ScenarioError("time.dt_adcs_s must be a whole multiple of time.dt_dynamics_s")
 
     spacecraft = _parse_spacecraft(root.table("spacecraft"))
     init_t = root.table("initial")
-    q0 = quat_normalize(init_t.vector("quaternion", tuple(IDENTITY_QUAT), size=4))
+    q_raw = init_t.vector("quaternion", tuple(IDENTITY_QUAT), size=4)
+    if not np.linalg.norm(q_raw) > 0.0:
+        raise ScenarioError("'initial.quaternion' must not be zero")
+    q0 = quat_normalize(q_raw)
     w0 = np.radians(init_t.vector("rate_deg_s", (0.0, 0.0, 0.0)))
 
     dist_t = root.table("disturbances")
@@ -250,7 +283,12 @@ def parse_scenario(data: dict[str, Any], base_dir: Path, source: str = "") -> Sc
     sensors_raw = root.get("sensors", {})
     if not isinstance(sensors_raw, dict):
         raise ScenarioError("'sensors' must be a table")
-    _parse_sensors(_Table(sensors_raw, "sensors"))  # validate now, build fresh per run
+    try:
+        _parse_sensors(_Table(sensors_raw, "sensors"))  # validate now, build fresh per run
+    except ScenarioError:
+        raise
+    except ValueError as exc:
+        raise ScenarioError(f"sensors: {exc}") from None
 
     root.finish([orbit_t, time_t, init_t, dist_t, act_t])
     if not isinstance(backend, str):
@@ -324,22 +362,30 @@ def _parse_orbit(t: _Table, base_dir: Path) -> tuple[Orbit, datetime | None]:
 def _parse_spacecraft(t: _Table) -> Spacecraft:
     defaults = Spacecraft()
     mass = t.number("mass_kg", defaults.mass_kg)
+    if not mass > 0.0:
+        raise ScenarioError("'spacecraft.mass_kg' must be positive")
     if t.has("inertia_kg_m2") and t.has("principal_inertia_kg_m2"):
         raise ScenarioError("give either 'inertia_kg_m2' or 'principal_inertia_kg_m2'")
     if t.has("inertia_kg_m2"):
-        inertia = np.asarray(t.get("inertia_kg_m2"), dtype=np.float64)
+        try:
+            inertia = np.asarray(t.get("inertia_kg_m2"), dtype=np.float64)
+        except (TypeError, ValueError):
+            raise ScenarioError("'spacecraft.inertia_kg_m2' must be a 3x3 matrix") from None
+        if not np.all(np.isfinite(inertia)):
+            raise ScenarioError("'spacecraft.inertia_kg_m2' must be finite")
     elif t.has("principal_inertia_kg_m2"):
         inertia = np.diag(t.vector("principal_inertia_kg_m2", (0.0, 0.0, 0.0)))
     else:
-        inertia = defaults.inertia
+        # a uniform box of the given mass (the default mass gives the default inertia)
+        inertia = box_inertia(mass, defaults.dimensions_m)
     try:
         sc = Spacecraft(
             mass_kg=mass,
             inertia=inertia,
             residual_dipole=t.vector("residual_dipole_A_m2", tuple(defaults.residual_dipole)),
             centre_of_pressure=t.vector("centre_of_pressure_m", tuple(defaults.centre_of_pressure)),
-            drag_coefficient=t.number("drag_coefficient", defaults.drag_coefficient),
-            reflectivity_coefficient=t.number(
+            drag_coefficient=t.nonnegative("drag_coefficient", defaults.drag_coefficient),
+            reflectivity_coefficient=t.nonnegative(
                 "reflectivity_coefficient", defaults.reflectivity_coefficient
             ),
         )
@@ -366,7 +412,7 @@ def _errors(t: _Table, unit: str, scale: float, rng_: float, lsb: float) -> Sens
     quantize = t.flag("quantize", True)
     saturate = t.flag("saturate", True)
     return SensorErrors(
-        noise_std=t.number(f"noise_std_{unit}", 0.0) * scale,
+        noise_std=t.nonnegative(f"noise_std_{unit}", 0.0) * scale,
         bias=t.vector(f"bias_{unit}", (0.0, 0.0, 0.0)) * scale,
         bias_windows=_bias_windows(t, f"bias_{unit}", scale),
         scale_factor=t.vector("scale_factor", (0.0, 0.0, 0.0)),
@@ -388,11 +434,14 @@ def _parse_sensors(t: _Table) -> SensorSuite:
     )
     gyro = GyroscopeModel(
         errors=_errors(gyro_t, "deg_s", math.pi / 180.0, GYRO_RANGE_RAD_S, GYRO_LSB_RAD_S),
-        bias_walk_std=math.radians(gyro_t.number("bias_walk_deg_s_sqrt_s", 0.0)),
+        bias_walk_std=math.radians(gyro_t.nonnegative("bias_walk_deg_s_sqrt_s", 0.0)),
     )
+    half_fov = sun_t.number("half_fov_deg", math.degrees(PSD_HALF_FOV_RAD))
+    if not 0.0 < half_fov <= 180.0:
+        raise ScenarioError("'sensors.sun.half_fov_deg' must be in (0, 180]")
     sun = SunSensorModel(
-        noise_std_rad=math.radians(sun_t.number("noise_std_deg", 0.0)),
-        half_fov_rad=math.radians(sun_t.number("half_fov_deg", math.degrees(PSD_HALF_FOV_RAD))),
+        noise_std_rad=math.radians(sun_t.nonnegative("noise_std_deg", 0.0)),
+        half_fov_rad=math.radians(half_fov),
     )
     t.finish([mag_t, gyro_t, sun_t])
     return SensorSuite(mag, gyro, sun)

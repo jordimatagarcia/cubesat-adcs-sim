@@ -39,12 +39,19 @@ class Magnetorquers:
         object.__setattr__(self, "max_dipole", m)
 
     def apply(self, m_cmd: FloatArray) -> FloatArray:
-        """Dipole the coils actually produce for a commanded dipole."""
-        m = np.clip(np.asarray(m_cmd, dtype=np.float64), -self.max_dipole, self.max_dipole)
+        """Dipole the coils actually produce for a commanded dipole. A non-finite component
+        (a faulty controller) drives that coil to zero rather than into the dynamics."""
+        m = np.asarray(m_cmd, dtype=np.float64)
+        m = np.where(np.isfinite(m), m, 0.0)
+        m = np.clip(m, -self.max_dipole, self.max_dipole)
         if self.levels > 0:
             step = self.max_dipole / self.levels
             m = np.round(m / step) * step
         return np.asarray(m)
+
+    def on_time(self, period: float) -> float:
+        """Seconds the coils are on at the start of each control period."""
+        return self.duty_cycle * period
 
     def active(self, time_in_period: float, period: float) -> bool:
         """Whether the coils are on at ``time_in_period`` seconds into a control period."""

@@ -146,7 +146,11 @@ class EnvironmentSample:
 
     def at(self, i: int) -> "EnvironmentSample":
         """The ``i``-th sample as a batch of one."""
-        sl = slice(i, i + 1)
+        return self.slice(i, i + 1)
+
+    def slice(self, start: int, stop: int) -> "EnvironmentSample":
+        """Samples ``start`` to ``stop - 1``."""
+        sl = slice(start, stop)
         return EnvironmentSample(
             **{name: getattr(self, name)[sl] for name in self.__dataclass_fields__}
         )
