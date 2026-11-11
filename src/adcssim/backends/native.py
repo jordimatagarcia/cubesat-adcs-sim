@@ -16,6 +16,7 @@ from pathlib import Path
 
 from adcssim.backends.abi import (
     ABI_VERSION,
+    REAL_SIZE,
     AdcsConfigC,
     AdcsInputC,
     AdcsOutputC,
@@ -40,8 +41,9 @@ LIBRARIES = {
 }
 
 
-class LibraryNotFoundError(RuntimeError):
-    pass
+class LibraryNotFoundError(ValueError):
+    """Raised when a compiled backend's library is missing. A ``ValueError`` so the CLI
+    reports it as a usage error, like an unknown backend name."""
 
 
 def library_path(backend: str) -> Path:
@@ -60,6 +62,8 @@ def _load(path: Path) -> ctypes.CDLL:
     lib.adcs_abi_version.argtypes = []
     lib.adcs_state_size.restype = ctypes.c_size_t
     lib.adcs_state_size.argtypes = []
+    lib.adcs_real_size.restype = ctypes.c_size_t
+    lib.adcs_real_size.argtypes = []
     lib.adcs_init.restype = ctypes.c_int
     lib.adcs_init.argtypes = [ctypes.c_void_p, ctypes.POINTER(AdcsConfigC)]
     lib.adcs_step.restype = ctypes.c_int
@@ -71,6 +75,12 @@ def _load(path: Path) -> ctypes.CDLL:
     version = lib.adcs_abi_version()
     if version != ABI_VERSION:
         raise RuntimeError(f"{path}: ABI version {version}, expected {ABI_VERSION}")
+    real_size = lib.adcs_real_size()
+    if real_size != REAL_SIZE:
+        raise RuntimeError(
+            f"{path}: built with {real_size}-byte reals; this binding needs {REAL_SIZE} "
+            "(a single-precision build cannot be loaded)"
+        )
     return lib
 
 
@@ -99,7 +109,9 @@ class NativeAdcs:
         if not self._initialised:
             return AdcsOutput(status=int(AdcsStatus.NOT_INITIALISED))
         c_in = input_to_c(inp)
-        self.lib.adcs_step(
+        rc = self.lib.adcs_step(
             ctypes.addressof(self._state), ctypes.byref(c_in), ctypes.byref(self._out)
         )
+        if rc != 0:
+            raise RuntimeError(f"{self.name}: adcs_step returned {rc}")
         return output_from_c(self._out)

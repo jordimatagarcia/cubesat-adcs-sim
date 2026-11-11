@@ -82,7 +82,8 @@ static void rotation_blocks(const adcs_real w[3], adcs_real dt, adcs_real phi11[
 
 bool mekf_step(mekf *f, const adcs_real gyro[3], adcs_real dt, const adcs_real sun_b[3],
                const adcs_real sun_i[3], bool sun_available, const adcs_real mag_ut[3],
-               const adcs_real mag_i_ut[3], bool mag_available)
+               const adcs_real mag_i_ut[3], bool mag_available, adcs_real extra_attitude_var,
+               bool freeze_gyro_bias)
 {
     mekf_work *k = &f->work;
     adcs_real *phi = k->phi, *tmp = k->tmp, *p_pred = k->p_pred, *ikh = k->ikh;
@@ -119,6 +120,9 @@ bool mekf_step(mekf *f, const adcs_real gyro[3], adcs_real dt, const adcs_real s
         LA_AT(p_pred, NX, MEKF_GYRO + i, MEKF_GYRO + i) += su2 * dt;
         LA_AT(p_pred, NX, MEKF_MAG + i, MEKF_MAG + i) +=
             f->sigma_mag_bias_walk * f->sigma_mag_bias_walk * dt;
+    }
+    for (size_t i = 0; i < 3; i++) {
+        LA_AT(p_pred, NX, MEKF_ATT + i, MEKF_ATT + i) += extra_attitude_var;
     }
 
     /* ---- update ----------------------------------------------------------------------- */
@@ -163,6 +167,13 @@ bool mekf_step(mekf *f, const adcs_real gyro[3], adcs_real dt, const adcs_real s
     }
     la_mul_bt(NX, NX, NY, p_pred, h, pht);
     const int solved = la_right_divide(NX, NY, pht, s, gain, k->solve);
+    if (freeze_gyro_bias) {
+        for (size_t i = 0; i < 3; i++) {
+            for (size_t j = 0; j < NY; j++) {
+                LA_AT(gain, NY, MEKF_GYRO + i, j) = (adcs_real)0;
+            }
+        }
+    }
     adcs_real innov[NY], dx[NX];
     for (size_t i = 0; i < NY; i++) {
         innov[i] = y[i] - y_hat[i];

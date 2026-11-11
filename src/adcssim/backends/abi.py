@@ -6,14 +6,16 @@ every struct size and field offset here matches.
 """
 
 import ctypes
-from ctypes import Structure, c_bool, c_double, c_uint32
+from ctypes import Structure, c_double, c_uint8, c_uint32
 
 import numpy as np
 
 from adcssim.backends.base import AdcsInput, AdcsMode, AdcsOutput
 from adcssim.backends.config import NB, NX, AdcsConfig
 
-ABI_VERSION = 3
+ABI_VERSION = 4
+REAL_SIZE = ctypes.sizeof(c_double)
+"""``adcs_real_size()`` of the libraries this mirror can load (double precision)."""
 VARIANT_IDS = {"thesis": 0, "mekf": 1}
 """Variants implemented by the C and Rust libraries (the UKF variant is Python-only)."""
 
@@ -52,7 +54,8 @@ class AdcsConfigC(Structure):
         ("fault_gyro_bias_sigma", Real),
         ("fault_mag_bias_sigma", Real),
         ("fault_attitude_sigma", Real),
-        ("control_enabled", c_bool),
+        ("sigma_outage_accel", Real),
+        ("control_enabled", c_uint8),
         ("bdot_gain", Real),
         ("kp", Real),
         ("kd", Real),
@@ -67,11 +70,11 @@ class AdcsInputC(Structure):
     _fields_ = [
         ("t", Real),
         ("mag_b", Vec3),
-        ("mag_valid", c_bool),
+        ("mag_valid", c_uint8),
         ("gyro_b", Vec3),
-        ("gyro_valid", c_bool),
+        ("gyro_valid", c_uint8),
         ("sun_b", Vec3),
-        ("sun_valid", c_bool),
+        ("sun_valid", c_uint8),
         ("sun_ref_i", Vec3),
         ("mag_ref_i", Vec3),
     ]
@@ -136,7 +139,8 @@ def config_to_c(
         fault_gyro_bias_sigma=cfg.fault_gyro_bias_sigma,
         fault_mag_bias_sigma=cfg.fault_mag_bias_sigma,
         fault_attitude_sigma=cfg.fault_attitude_sigma,
-        control_enabled=cfg.control_enabled,
+        sigma_outage_accel=cfg.sigma_outage_accel,
+        control_enabled=int(cfg.control_enabled),
         bdot_gain=cfg.bdot_gain,
         kp=cfg.kp,
         kd=cfg.kd,
@@ -151,11 +155,11 @@ def input_to_c(inp: AdcsInput) -> AdcsInputC:
     return AdcsInputC(
         t=inp.t,
         mag_b=_arr(Vec3, inp.mag_b),
-        mag_valid=inp.mag_valid,
+        mag_valid=int(inp.mag_valid),
         gyro_b=_arr(Vec3, inp.gyro_b),
-        gyro_valid=inp.gyro_valid,
+        gyro_valid=int(inp.gyro_valid),
         sun_b=_arr(Vec3, inp.sun_b),
-        sun_valid=inp.sun_valid,
+        sun_valid=int(inp.sun_valid),
         sun_ref_i=_arr(Vec3, inp.sun_ref_i),
         mag_ref_i=_arr(Vec3, inp.mag_ref_i),
     )

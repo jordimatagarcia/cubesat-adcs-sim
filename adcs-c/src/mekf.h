@@ -57,10 +57,14 @@ void mekf_configure(mekf *f, adcs_real sigma_gyro_noise, adcs_real sigma_gyro_bi
 void mekf_reset(mekf *f, const adcs_real q0[4], const adcs_real p0_diag[MEKF_NX]);
 
 /* Propagate over dt with the rate gyro (rad/s), then update with the vectors (unit sun,
- * field in µT). Returns false if the result was not finite and the covariance was reset. */
+ * field in µT). extra_attitude_var (rad²) is added to the attitude variance (gyro outage);
+ * with freeze_gyro_bias the update leaves the gyro-bias estimate unchanged (zero gain rows;
+ * the Joseph form keeps the covariance correct for that gain). Returns false if the result
+ * was not finite and the covariance was reset. */
 bool mekf_step(mekf *f, const adcs_real gyro[3], adcs_real dt, const adcs_real sun_b[3],
                const adcs_real sun_i[3], bool sun_available, const adcs_real mag_ut[3],
-               const adcs_real mag_i_ut[3], bool mag_available);
+               const adcs_real mag_i_ut[3], bool mag_available, adcs_real extra_attitude_var,
+               bool freeze_gyro_bias);
 
 /* Add variance to the diagonal (standard deviations given). */
 void mekf_inflate(mekf *f, adcs_real attitude, adcs_real gyro_bias, adcs_real mag_bias);

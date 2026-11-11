@@ -14,7 +14,8 @@ Two implementation choices beyond the thesis text:
 - The elimination uses full pivoting and fixes the free component of the eigenvector to
   whichever unknown is left last. The thesis (and Wu's paper) fix ``q4 = −1``, which divides
   by zero when that component of the attitude is near zero.
-- The weights are normalised to sum to 1, so λ ≈ 1 is the Newton starting point.
+- The weights are normalised to sum to 1, and Newton starts from Σ aᵢ|bᵢ||rᵢ| (1 for unit
+  vectors), an upper bound of the largest eigenvalue.
 """
 
 from dataclasses import dataclass
@@ -124,7 +125,10 @@ def flae(
     w = _w_matrix(b)
     tau1, tau2, tau3 = characteristic_coefficients(b, w)
 
-    lam = 1.0
+    # Newton from Σ a |b| |r|, an upper bound of λmax: from above it converges monotonically
+    # to the largest root. (λ = 1 assumed unit vectors; with longer ones it could converge to
+    # a smaller root and return a 180°-wrong attitude marked as success.)
+    lam = float(np.sum(a * np.linalg.norm(bv, axis=1) * np.linalg.norm(rv, axis=1)))
     iterations = 0
     for _ in range(max_iterations):
         iterations += 1

@@ -48,8 +48,6 @@ mod imp {
 pub use imp::Real;
 pub(crate) use imp::{TINY, abs, cos, rint, sin, sqrt};
 
-pub(crate) const EPS: Real = Real::EPSILON;
-
 /// Tolerances for the unit tests, which run in both precisions.
 #[cfg(all(test, not(feature = "f32")))]
 pub(crate) const TEST_TOL: Real = 1e-12;

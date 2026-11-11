@@ -30,6 +30,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --features adcs-ffi/f32 -- -D warnings
       - run: cargo test --workspace --release
       - run: cargo test --workspace --release --features adcs-ffi/f32
+      # the C bare-metal example, unchanged, on the Rust library: the state fits and it runs
+      - run: tools/host_example.sh
 
   miri:
     # Undefined-behaviour check of the unit tests, including the FFI crate's unsafe code.

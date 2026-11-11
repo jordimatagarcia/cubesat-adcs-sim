@@ -66,7 +66,14 @@ class Mekf:
         mag_ut: FloatArray,
         mag_i_ut: FloatArray,
         mag_available: bool,
+        extra_attitude_var: float = 0.0,
+        freeze_gyro_bias: bool = False,
     ) -> bool:
+        """Propagate with the rate ``gyro`` and update. ``extra_attitude_var`` (rad²) is added
+        to the attitude variance (gyro outage); with ``freeze_gyro_bias`` the update leaves
+        the gyro-bias estimate unchanged (its gain rows are zero; the Joseph form keeps the
+        covariance correct for that sub-optimal gain). Returns False if the result was not
+        finite and the covariance was reset."""
         # ---- propagation ------------------------------------------------------------
         w = gyro - self.x[GYRO]
         self.q_ref = quat_mul(rotation_quat(w, dt), self.q_ref)
@@ -82,6 +89,8 @@ class Mekf:
         q[GYRO, GYRO] = np.eye(3) * su2 * dt
         q[MAG, MAG] = np.eye(3) * self.sigma_mag_bias_walk**2 * dt
         p_pred = phi @ self.p @ phi.T + q
+        for i in range(3):
+            p_pred[i, i] += extra_attitude_var
 
         # ---- update -------------------------------------------------------------------
         a = quat_to_dcm(self.q_ref)
@@ -98,6 +107,8 @@ class Mekf:
         r[~available, ~available] = UNAVAILABLE_VARIANCE
         s = h @ p_pred @ h.T + r
         gain = np.linalg.solve(s.T, (p_pred @ h.T).T).T
+        if freeze_gyro_bias:
+            gain[GYRO, :] = 0.0
         innov = y - y_hat
         dx = gain @ innov
         ikh = np.eye(NX) - gain @ h

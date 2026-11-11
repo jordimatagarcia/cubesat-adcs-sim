@@ -11,7 +11,7 @@ use crate::linalg::{
     Singular, all_finite, cholesky, diag, inverse, mul, mul_bt, mul_vec, right_divide, symmetrize,
 };
 use crate::quat;
-use crate::real::{EPS, NAN, Real, TINY, abs, sqrt};
+use crate::real::{NAN, Real, TINY, abs, sqrt};
 
 pub const NY: usize = NX;
 pub const NS: usize = 2 * NX + 1;
@@ -22,6 +22,11 @@ pub const MAG: usize = 7;
 pub const W: usize = 10;
 
 const UNAVAILABLE_VARIANCE: Real = 1e12;
+/// Added to the diagonal before every factorisation. The double-precision epsilon in both
+/// precisions: `f32`'s (1.2e-7) is larger than the process noise on q and ω and would act as
+/// extra process noise, wrecking the single-precision filter.
+#[allow(clippy::excessive_precision)]
+const CHOLESKY_EPS: Real = 2.220_446_049_250_313e-16;
 const JITTER: [Real; 4] = [0.0, 1e-12, 1e-10, 1e-8];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,7 +93,7 @@ fn robust_cholesky(p: &[Real], lower: &mut [Real], tmp: &mut [Real]) -> Result<(
     for jitter in JITTER {
         tmp[..NX * NX].copy_from_slice(&p[..NX * NX]);
         for i in 0..NX {
-            tmp[i * NX + i] += EPS + jitter * scale;
+            tmp[i * NX + i] += CHOLESKY_EPS + jitter * scale;
         }
         if cholesky(NX, tmp, lower).is_ok() {
             return Ok(());

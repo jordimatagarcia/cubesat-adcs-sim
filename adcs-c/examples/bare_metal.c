@@ -2,8 +2,9 @@
  * bare_metal.c: the ADCS on a microcontroller, without an OS or a heap.
  *
  * Built in CI for an ARM Cortex-M4F (single precision) and a Cortex-M7 (double precision)
- * to check that the library compiles and links for bare metal. It is not run there: the
- * sensor reads and the coil driver are stubs.
+ * to check that the library compiles and links for bare metal, and for the host, where ctest
+ * runs it (exit code 0: the state fits and the ADCS runs) against the C library and the Rust
+ * library alike. The sensor reads and the coil driver are stubs.
  */
 #include <stdalign.h>
 #include <stddef.h>
@@ -11,8 +12,9 @@
 
 #include "adcs.h"
 
-/* The state lives in static memory; adcs_state_size() is checked against this at start. */
-#define STATE_BYTES 40000u
+/* The state lives in static memory; adcs_state_size() is checked against this at start.
+ * 48 KB covers both libraries in double precision (C 36 KB, Rust 42 KB). */
+#define STATE_BYTES 48000u
 static alignas(16) uint8_t state_memory[STATE_BYTES];
 
 static adcs_config make_config(void)
@@ -41,6 +43,7 @@ static adcs_config make_config(void)
     c.fault_gyro_bias_sigma = (adcs_real)0.1;
     c.fault_mag_bias_sigma = (adcs_real)50;
     c.fault_attitude_sigma = (adcs_real)0.05;
+    c.sigma_outage_accel = (adcs_real)1e-3;
     c.control_enabled = true;
     c.bdot_gain = (adcs_real)4e4;
     c.kp = (adcs_real)2e-5;
@@ -81,7 +84,7 @@ int main(void)
 {
     adcs_state *state = (adcs_state *)(void *)state_memory;
     const adcs_config cfg = make_config();
-    if (adcs_state_size() > STATE_BYTES || adcs_init(state, &cfg) != 0) {
+    if (!adcs_check_abi() || adcs_state_size() > STATE_BYTES || adcs_init(state, &cfg) != 0) {
         return 1;
     }
     for (uint32_t k = 0; k < 100; k++) { /* the control loop, one step per timer tick */

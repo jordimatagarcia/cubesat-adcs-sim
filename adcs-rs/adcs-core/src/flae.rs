@@ -141,7 +141,10 @@ pub fn flae2(
     let mut work = [0.0; 16];
     let tau3 = det(4, &w, &mut work);
 
-    let mut lam: Real = 1.0;
+    // Newton from Σ a |b| |r|, an upper bound of λmax: from above it converges monotonically to
+    // the largest root (λ = 1 assumed unit vectors, and could converge to a smaller root).
+    let mut lam: Real = a[0] * norm(&v_body[0..3]) * norm(&v_ref[0..3])
+        + a[1] * norm(&v_body[3..6]) * norm(&v_ref[3..6]);
     let mut it = 0;
     let mut converged = false;
     while it < max_iterations {

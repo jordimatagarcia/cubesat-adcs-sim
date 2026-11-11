@@ -1,9 +1,9 @@
 {
-  "C -O2": {"cortex-m4f-float": 22852, "cortex-m7-double": 22780},
-  "C -Os": {"cortex-m4f-float": 20164, "cortex-m7-double": 20676},
-  "C -O2 -flto": {"cortex-m4f-float": 24768, "cortex-m7-double": 25092},
-  "C -Os -flto": {"cortex-m4f-float": 19016, "cortex-m7-double": 19508},
-  "Rust opt-level 2": {"cortex-m4f-float": 89988, "cortex-m7-double": 95352},
-  "Rust opt-level s": {"cortex-m4f-float": 35792, "cortex-m7-double": 38364},
-  "Rust opt-level z": {"cortex-m4f-float": 35344, "cortex-m7-double": 37720}
+  "C -O2": {"cortex-m4f-float": 24616, "cortex-m7-double": 24380},
+  "C -Os": {"cortex-m4f-float": 21636, "cortex-m7-double": 22228},
+  "C -O2 -flto": {"cortex-m4f-float": 26708, "cortex-m7-double": 26964},
+  "C -Os -flto": {"cortex-m4f-float": 20500, "cortex-m7-double": 21308},
+  "Rust opt-level 2": {"cortex-m4f-float": 88772, "cortex-m7-double": 90068},
+  "Rust opt-level s": {"cortex-m4f-float": 34672, "cortex-m7-double": 33232},
+  "Rust opt-level z": {"cortex-m4f-float": 33784, "cortex-m7-double": 32160}
 }

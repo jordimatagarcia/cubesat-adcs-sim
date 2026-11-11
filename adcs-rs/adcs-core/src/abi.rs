@@ -2,8 +2,8 @@
 //! (`#[repr(C)]`). The `adcs-ffi` crate passes them across the C interface unchanged; a test
 //! there checks every offset against the C compiler's.
 //!
-//! The C `bool` fields are `u8` here (non-zero is true), so that a foreign caller passing a
-//! value other than 0 or 1 cannot create an invalid Rust `bool`.
+//! The flag fields are bytes (`uint8_t` in the header, non-zero is true), so any value a
+//! foreign caller passes is valid.
 
 use crate::real::Real;
 
@@ -27,6 +27,7 @@ pub const STATUS_COVARIANCE_RESET: u32 = 1 << 3;
 pub const STATUS_DIPOLE_SATURATED: u32 = 1 << 4;
 pub const STATUS_NOT_INITIALISED: u32 = 1 << 5;
 pub const STATUS_BIAS_FAULT: u32 = 1 << 6;
+pub const STATUS_RATE_PROPAGATED: u32 = 1 << 7;
 
 /// `adcs_config`: see the header for the meaning of each field.
 #[repr(C)]
@@ -60,6 +61,7 @@ pub struct Config {
     pub fault_gyro_bias_sigma: Real,
     pub fault_mag_bias_sigma: Real,
     pub fault_attitude_sigma: Real,
+    pub sigma_outage_accel: Real,
     pub control_enabled: u8,
     pub bdot_gain: Real,
     pub kp: Real,
@@ -101,6 +103,7 @@ impl Config {
         fault_gyro_bias_sigma: 0.0,
         fault_mag_bias_sigma: 0.0,
         fault_attitude_sigma: 0.0,
+        sigma_outage_accel: 0.0,
         control_enabled: 0,
         bdot_gain: 0.0,
         kp: 0.0,

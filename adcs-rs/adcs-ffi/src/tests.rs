@@ -10,6 +10,7 @@ use std::process::Command;
 #[test]
 fn exports_core_abi_version() {
     assert_eq!(adcs_abi_version(), adcs_core::ABI_VERSION);
+    assert_eq!(adcs_real_size(), size_of::<adcs_core::Real>());
 }
 
 /// The `#[repr(C)]` structs must match the C compiler's layout of adcs.h, field by field.
@@ -148,8 +149,13 @@ fn config(variant: u32) -> Config {
     c.p0_attitude = 0.1;
     c.p0_gyro_bias = 0.1;
     c.p0_mag_bias = 0.1;
+    c.sigma_gyro_noise = 1e-4;
     c.fault_nis_threshold = 25.0;
     c.fault_steps = 3;
+    c.fault_gyro_bias_sigma = 0.1;
+    c.fault_mag_bias_sigma = 0.1;
+    c.fault_attitude_sigma = 0.1;
+    c.sigma_outage_accel = 1e-3;
     c.q_target[3] = 1.0;
     c
 }

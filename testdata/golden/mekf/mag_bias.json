@@ -103,6 +103,7 @@
   "fault_gyro_bias_sigma": 0.1,
   "fault_mag_bias_sigma": 50.0,
   "fault_attitude_sigma": 0.05,
+  "sigma_outage_accel": 0.001,
   "control_enabled": false,
   "bdot_gain": 40000.0,
   "kp": 2e-05,

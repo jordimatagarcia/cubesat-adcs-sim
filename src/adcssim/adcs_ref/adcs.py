@@ -28,7 +28,13 @@ from numpy.typing import NDArray
 from adcssim.adcs_ref.adcs_improved import ImprovedAdcs
 from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
-from adcssim.adcs_ref.limits import field_plausible, gyro_plausible, safe_norm, unit_plausible
+from adcssim.adcs_ref.limits import (
+    field_plausible,
+    gyro_plausible,
+    safe_norm,
+    unit,
+    unit_plausible,
+)
 from adcssim.adcs_ref.tsukf import TwoStageUkf
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
 from adcssim.backends.config import NB, NX, AdcsConfig
@@ -150,6 +156,7 @@ class ThesisAdcs:
 
     def reset(self, ctx: AdcsContext) -> None:
         cfg = ctx.config
+        cfg.validate(ctx.dt, ctx.inertia, ctx.max_dipole)
         fa, fs = fault_matrices()
         self.ctx = ctx
         self.inertia = np.asarray(ctx.inertia, dtype=np.float64)
@@ -186,7 +193,9 @@ class ThesisAdcs:
             status |= AdcsStatus.BAD_INPUT
         mag_ut = np.asarray(inp.mag_b) * UT if mag_ok else np.zeros(3)
         mag_ref_ut = np.asarray(inp.mag_ref_i) * UT if mag_ref_ok else np.zeros(3)
-        sun_b = np.asarray(inp.sun_b) if sun_ok else np.zeros(3)
+        # Directions are normalised: the plausibility check accepts lengths 0.5–2.
+        sun_b = unit(inp.sun_b) if sun_ok else np.zeros(3)
+        sun_ref = unit(inp.sun_ref_i) if sun_ref_ok else np.zeros(3)
         gyro = np.asarray(inp.gyro_b) if gyro_ok else np.zeros(3)
 
         # Attitude measurement from FLAE (needs two vectors). Without a sun reading, the
@@ -201,7 +210,7 @@ class ThesisAdcs:
             prev = self.filter.state.x[Q] if self.filter.state is not None else self.last_flae_q
             res = flae(
                 np.vstack([sun_for_flae, mag_ut / np.linalg.norm(mag_ut)]),
-                np.vstack([inp.sun_ref_i, mag_ref_ut / np.linalg.norm(mag_ref_ut)]),
+                np.vstack([sun_ref, mag_ref_ut / np.linalg.norm(mag_ref_ut)]),
                 [cfg.flae_weight_sun, cfg.flae_weight_mag],
                 q_prev=prev,
                 tolerance=cfg.flae_tolerance,
@@ -239,7 +248,7 @@ class ThesisAdcs:
                 dt,
                 cfg.process_dt,
                 rot,
-                np.asarray(inp.sun_ref_i, dtype=np.float64) if sun_ref_ok else rot.T @ state.x[SUN],
+                sun_ref if sun_ref_ok else rot.T @ state.x[SUN],
                 mag_ref_ut if mag_ref_ok else rot.T @ state.x[MAG],
                 torque,
                 self.inertia,

@@ -5,17 +5,19 @@
 use crate::abi::{
     Config, Input, MEKF_NX, MODE_OFF, NB, NX, Output, STATUS_BAD_INPUT, STATUS_BIAS_FAULT,
     STATUS_COVARIANCE_RESET, STATUS_FLAE_FAILED, STATUS_NO_ATTITUDE_FIX, STATUS_NOT_INITIALISED,
-    VARIANT_MEKF, VARIANT_THESIS,
+    STATUS_RATE_PROPAGATED, VARIANT_MEKF, VARIANT_THESIS,
 };
 use crate::control::Control;
 use crate::flae::flae2;
-use crate::linalg::{all_finite, cross, det, inverse, mul_vec, norm};
+use crate::linalg::{all_finite, cholesky, cross, inverse, mul_vec, norm};
 use crate::mekf::{self, Mekf};
 use crate::quat::{self, Quat};
-use crate::real::{NAN, Real, cos, rint, sin};
+use crate::real::{NAN, Real, abs, cos, rint, sin};
 use crate::tsukf::{self, Tsukf};
 
-const MAGIC: u32 = 0x4144_4353; // "ADCS"
+/// Marks an initialised [`Adcs`]; the first field of its `repr(C)` layout.
+pub const MAGIC: u32 = 0x4144_4353; // "ADCS"
+const _: () = assert!(core::mem::offset_of!(Adcs, magic) == 0);
 /// Tesla → microtesla, the filters' unit for the field.
 const UT: Real = 1e6;
 
@@ -72,54 +74,88 @@ fn all_nonnegative(v: &[Real]) -> bool {
     v.iter().all(|&x| x >= 0.0 && x.is_finite())
 }
 
+// Configuration rules, the same in every implementation (config_problems in
+// src/adcssim/backends/config.py; docs/adcs.md, "Configuration rules").
+const MAX_DT: Real = 10.0;
+/// Bounds the RK4 steps per filter step, and so its run time.
+const MAX_PROCESS_STEPS: Real = 1000.0;
+const MAX_FLAE_ITERATIONS: u32 = 1000;
+/// Below this the unscented-transform weights lose precision.
+const ALPHA_MIN: Real = 1e-2;
+const ALPHA_MAX: Real = 1e2;
+const MAX_BDOT_GAIN: Real = 1e9;
+const MAX_PD_GAIN: Real = 1e3;
+
+fn in_range(x: Real, lo: Real, hi: Real) -> bool {
+    x.is_finite() && x >= lo && x <= hi
+}
+
+fn inertia_valid(m: &[Real; 9]) -> bool {
+    if !all_finite(m) {
+        return false;
+    }
+    let (mut scale, mut asym): (Real, Real) = (0.0, 0.0);
+    for x in m {
+        scale = if abs(*x) > scale { abs(*x) } else { scale };
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            let d = abs(m[i * 3 + j] - m[j * 3 + i]);
+            asym = if d > asym { d } else { asym };
+        }
+    }
+    let mut lower = [0.0; 9];
+    asym <= 1e-9 * scale && cholesky(3, m, &mut lower).is_ok()
+}
+
 fn config_valid(c: &Config) -> bool {
-    let mut work = [0.0; 9];
-    let weights = [c.flae_weight_sun, c.flae_weight_mag];
-    let control = [
-        c.bdot_gain,
-        c.kp,
-        c.kd,
-        c.detumble_enter_rate,
-        c.detumble_exit_rate,
-        c.settle_time,
-    ];
-    if !all_positive(&[c.dt])
-        || !all_finite(&c.inertia)
-        || det(3, &c.inertia, &mut work) == 0.0
-        || !all_positive(&c.max_dipole)
-        || !all_nonnegative(&weights)
-        || !(weights[0] + weights[1] > 0.0)
-        || !all_positive(&[c.flae_tolerance])
-        || !all_nonnegative(&control)
-        || !all_finite(&c.q_target)
-    {
+    let wsum = c.flae_weight_sun + c.flae_weight_mag;
+    let qn = quat::norm(&c.q_target);
+    let common = in_range(c.dt, 0.0, MAX_DT)
+        && c.dt > 0.0
+        && inertia_valid(&c.inertia)
+        && all_positive(&c.max_dipole)
+        && all_nonnegative(&[c.flae_weight_sun, c.flae_weight_mag])
+        && all_positive(&[wsum, c.flae_tolerance])
+        && (1..=MAX_FLAE_ITERATIONS).contains(&c.flae_max_iterations)
+        && in_range(c.bdot_gain, 0.0, MAX_BDOT_GAIN)
+        && in_range(c.kp, 0.0, MAX_PD_GAIN)
+        && in_range(c.kd, 0.0, MAX_PD_GAIN)
+        && all_nonnegative(&[c.detumble_exit_rate, c.settle_time])
+        && in_range(c.detumble_enter_rate, c.detumble_exit_rate, Real::INFINITY)
+        && all_finite(&c.q_target)
+        && abs(qn - 1.0) <= 1e-6;
+    if !common {
         return false;
     }
     match c.variant {
         VARIANT_THESIS => {
-            all_positive(&[c.process_dt, c.ukf_alpha])
+            all_positive(&[c.process_dt])
+                && c.dt / c.process_dt <= MAX_PROCESS_STEPS
+                && in_range(c.ukf_alpha, ALPHA_MIN, ALPHA_MAX)
                 && all_positive(&c.p_x0)
                 && all_positive(&c.p_b0)
+                && all_positive(&c.v)
                 && all_nonnegative(&c.w_x)
                 && all_nonnegative(&c.w_b)
-                && all_positive(&c.v)
         }
         VARIANT_MEKF => {
             all_positive(&[
+                c.sigma_gyro_noise,
                 c.sigma_mag_noise,
                 c.sigma_sun_noise,
                 c.p0_attitude,
                 c.p0_gyro_bias,
                 c.p0_mag_bias,
-            ]) && all_nonnegative(&[
-                c.sigma_gyro_noise,
-                c.sigma_gyro_bias_walk,
-                c.sigma_mag_bias_walk,
+                c.fault_nis_threshold,
                 c.fault_gyro_bias_sigma,
                 c.fault_mag_bias_sigma,
                 c.fault_attitude_sigma,
-                c.fault_nis_threshold,
-            ])
+            ]) && all_nonnegative(&[
+                c.sigma_gyro_bias_walk,
+                c.sigma_mag_bias_walk,
+                c.sigma_outage_accel,
+            ]) && c.fault_steps >= 1
         }
         _ => false,
     }
@@ -240,11 +276,45 @@ struct MekfState {
     filter: Mekf,
     gyro_prev: [Real; 3],
     suspect_steps: u32,
+    inertia: [Real; 9],
+    inertia_inv: [Real; 9],
+    /// s since the gyro became unavailable, 0 while it works
+    outage_time: Real,
 }
 
-/// The whole ADCS state. Large (about 40 KB in double precision) and with no heap use:
+/// The outage growth stops once an attitude variance reaches this σ² (rad): beyond ~15° the
+/// attitude is effectively unknown, and more would only break the linearisation.
+const OUTAGE_MAX_ATTITUDE_SIGMA: Real = 0.25;
+
+/// Torque-free Euler equations, ω̇ = I⁻¹ (−ω × Iω).
+fn euler_rate(w: &[Real; 3], inertia: &[Real; 9], inertia_inv: &[Real; 9]) -> [Real; 3] {
+    let mut iw = [0.0; 3];
+    mul_vec(3, 3, inertia, w, &mut iw);
+    let g = cross(&[-w[0], -w[1], -w[2]], &iw);
+    let mut out = [0.0; 3];
+    mul_vec(3, 3, inertia_inv, &g, &mut out);
+    out
+}
+
+/// Body rate after `dt` without torques (one RK4 step).
+fn propagate_rate(w: &[Real; 3], dt: Real, inertia: &[Real; 9], inv: &[Real; 9]) -> [Real; 3] {
+    let k1 = euler_rate(w, inertia, inv);
+    let xt = [0, 1, 2].map(|i| w[i] + 0.5 * dt * k1[i]);
+    let k2 = euler_rate(&xt, inertia, inv);
+    let xt = [0, 1, 2].map(|i| w[i] + 0.5 * dt * k2[i]);
+    let k3 = euler_rate(&xt, inertia, inv);
+    let xt = [0, 1, 2].map(|i| w[i] + dt * k3[i]);
+    let k4 = euler_rate(&xt, inertia, inv);
+    [0, 1, 2].map(|i| w[i] + dt * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0)
+}
+
+/// The whole ADCS state. Large (about 42 KB in double precision) and with no heap use:
 /// place it in static memory, or let the caller of the C interface allocate it.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `repr(C)` with the magic number first, so the C interface can read it through a raw
+/// pointer before treating the memory as an `Adcs`.
+#[repr(C)]
+#[derive(Clone, Debug)]
 pub struct Adcs {
     magic: u32,
     cfg: Config,
@@ -281,6 +351,9 @@ impl Adcs {
                 filter: Mekf::ZERO,
                 gyro_prev: [0.0; 3],
                 suspect_steps: 0,
+                inertia: [0.0; 9],
+                inertia_inv: [0.0; 9],
+                outage_time: 0.0,
             },
         }
     }
@@ -321,6 +394,10 @@ impl Adcs {
             );
             m.gyro_prev = [0.0; 3];
             m.suspect_steps = 0;
+            m.outage_time = 0.0;
+            m.inertia = cfg.inertia;
+            let mut work = [0.0; 9];
+            inverse(3, &cfg.inertia, &mut m.inertia_inv, &mut work).map_err(|_| InvalidConfig)?;
         }
         self.magic = MAGIC;
         Ok(())
@@ -358,6 +435,7 @@ impl Adcs {
             &x[tsukf::Q..tsukf::Q + 4],
             &x[tsukf::W..tsukf::W + 3],
             &b_body,
+            None,
             &mut status,
         );
         let f = &self.thesis.filter;
@@ -410,7 +488,17 @@ impl Adcs {
         } else {
             zero
         };
-        let sun_b = if sun_ok { input.sun_b } else { zero };
+        // Directions are normalised: the plausibility check accepts lengths 0.5–2.
+        let sun_b = if sun_ok {
+            div3(&input.sun_b, norm(&input.sun_b))
+        } else {
+            zero
+        };
+        let sun_ref = if sun_ref_ok {
+            div3(&input.sun_ref_i, norm(&input.sun_ref_i))
+        } else {
+            zero
+        };
         let gyro = if gyro_ok { input.gyro_b } else { zero };
 
         // Attitude measurement from FLAE (needs two vectors). Without a sun reading, the
@@ -432,7 +520,7 @@ impl Adcs {
         match sun_for_flae {
             Some(sun) if mag_ok && mag_ref_ok && sun_ref_ok => {
                 let body = pair(&sun, &div3(&mag_ut, norm(&mag_ut)));
-                let reference = pair(&input.sun_ref_i, &div3(&mag_ref_ut, norm(&mag_ref_ut)));
+                let reference = pair(&sun_ref, &div3(&mag_ref_ut, norm(&mag_ref_ut)));
                 let prev_state = [t.filter.x[0], t.filter.x[1], t.filter.x[2], t.filter.x[3]];
                 let prev = if self.initialised {
                     Some(&prev_state[..])
@@ -508,6 +596,8 @@ impl Adcs {
 
     // ---- MEKF variant ------------------------------------------------------------------
 
+    /// Control and output. `mag_ut`/`mag_ok`: the magnetometer reading, usable for B-dot
+    /// whether or not the field model is available.
     fn mekf_finish(
         &mut self,
         input: &Input,
@@ -535,13 +625,21 @@ impl Adcs {
             [0.0; 3]
         };
         let q_ref = f.q_ref;
-        let (mode, m) = self.control.update(&cfg, &q_ref, &w, &b_body, &mut status);
+        // B-dot from Ḃ = −ω̂ × B: a fixed inertial field seen from the rotating body.
+        let c = cross(&w, &b_body);
+        let b_dot = [-c[0], -c[1], -c[2]];
+        let (mode, m) = self
+            .control
+            .update(&cfg, &q_ref, &w, &b_body, Some(&b_dot), &mut status);
+        let rate_outage = cfg.sigma_outage_accel * self.mekf.outage_time;
         let f = &self.mekf.filter;
         let mut p_diag = [NAN; NX + NB];
         for i in 0..3 {
             let pg = f.p[(mekf::GYRO + i) * MEKF_NX + mekf::GYRO + i];
             p_diag[i] = f.p[(mekf::ATT + i) * MEKF_NX + mekf::ATT + i]; // rad²
-            p_diag[10 + i] = cfg.sigma_gyro_noise * cfg.sigma_gyro_noise + pg; // rate
+            // rate = gyro − bias (+ the propagation uncertainty during a gyro outage)
+            p_diag[10 + i] =
+                cfg.sigma_gyro_noise * cfg.sigma_gyro_noise + pg + rate_outage * rate_outage;
             p_diag[13 + i] = f.p[(mekf::MAG + i) * MEKF_NX + mekf::MAG + i];
             p_diag[16 + i] = pg;
         }
@@ -580,6 +678,31 @@ impl Adcs {
         false
     }
 
+    /// One step without the gyro: the rate propagated with the dynamics (as a gyro reading,
+    /// bias included) and the attitude variance to add for what they leave out, capped.
+    fn gyro_outage(&mut self, dt: Real) -> ([Real; 3], Real) {
+        let m = &mut self.mekf;
+        let b = &m.filter.x[mekf::GYRO..mekf::GYRO + 3];
+        let w_prev = [0, 1, 2].map(|i| m.gyro_prev[i] - b[i]);
+        let w_new = propagate_rate(&w_prev, dt, &m.inertia, &m.inertia_inv);
+        let gyro = [0, 1, 2].map(|i| w_new[i] + b[i]);
+        let t0 = m.outage_time;
+        m.outage_time = t0 + dt;
+        let (t1, sa) = (m.outage_time, self.cfg.sigma_outage_accel);
+        // rate error σ_α t → attitude error σ_α t²/2 → variance (σ_α²/4) t⁴
+        let var = 0.25 * sa * sa * (t1 * t1 * t1 * t1 - t0 * t0 * t0 * t0);
+        let p = &m.filter.p;
+        let mut largest = p[0];
+        for i in 1..3 {
+            let v = p[i * MEKF_NX + i];
+            largest = if v > largest { v } else { largest };
+        }
+        let room = OUTAGE_MAX_ATTITUDE_SIGMA * OUTAGE_MAX_ATTITUDE_SIGMA - largest;
+        let cap = if room > 0.0 { room } else { 0.0 };
+        (gyro, if var < cap { var } else { cap })
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn mekf_step(&mut self, input: &Input) -> Output {
         let cfg = self.cfg;
         let mut status = 0;
@@ -599,7 +722,14 @@ impl Adcs {
             status |= STATUS_BAD_INPUT;
         }
         let zero = [0.0; 3];
+        // The magnetometer reading itself (for B-dot) needs no reference model.
+        let mag_reading_ok = input.mag_valid != 0 && mag_plausible;
         let mag_ut = if mag_ok {
+            scale3(&input.mag_b, UT)
+        } else {
+            zero
+        };
+        let mag_meas_ut = if mag_reading_ok {
             scale3(&input.mag_b, UT)
         } else {
             zero
@@ -609,9 +739,18 @@ impl Adcs {
         } else {
             zero
         };
-        let sun_b = if sun_ok { input.sun_b } else { zero };
-        let sun_ref = if sun_ref_ok { input.sun_ref_i } else { zero };
-        let gyro = if gyro_ok {
+        // Directions are normalised: the plausibility check accepts lengths 0.5–2.
+        let sun_b = if sun_ok {
+            div3(&input.sun_b, norm(&input.sun_b))
+        } else {
+            zero
+        };
+        let sun_ref = if sun_ref_ok {
+            div3(&input.sun_ref_i, norm(&input.sun_ref_i))
+        } else {
+            zero
+        };
+        let mut gyro = if gyro_ok {
             input.gyro_b
         } else {
             self.mekf.gyro_prev
@@ -645,7 +784,18 @@ impl Adcs {
             self.mekf.filter.reset(&res.q, &p0);
             self.initialised = true;
             self.mekf.gyro_prev = gyro;
-            return self.mekf_finish(input, status, &gyro, &mag_ut, mag_ok);
+            return self.mekf_finish(input, status, &gyro, &mag_meas_ut, mag_reading_ok);
+        }
+
+        // Without the gyro, propagate the rate with the dynamics, grow the attitude
+        // uncertainty with what they leave out, and freeze the (unobservable) gyro bias.
+        let dt = cfg.dt;
+        let mut outage_var: Real = 0.0;
+        if gyro_ok {
+            self.mekf.outage_time = 0.0;
+        } else {
+            (gyro, outage_var) = self.gyro_outage(dt);
+            status |= STATUS_RATE_PROPAGATED;
         }
 
         // Propagate with the mean of the previous and current rate readings: the body rate
@@ -658,13 +808,15 @@ impl Adcs {
         ];
         if !self.mekf.filter.step(
             &rate,
-            cfg.dt,
+            dt,
             &sun_b,
             &sun_ref,
             sun_ok,
             &mag_ut,
             &mag_ref_ut,
             mag_ok,
+            outage_var,
+            !gyro_ok,
         ) {
             status |= STATUS_COVARIANCE_RESET;
         }
@@ -672,6 +824,6 @@ impl Adcs {
             status |= STATUS_BIAS_FAULT;
         }
         self.mekf.gyro_prev = gyro;
-        self.mekf_finish(input, status, &gyro, &mag_ut, mag_ok)
+        self.mekf_finish(input, status, &gyro, &mag_meas_ut, mag_reading_ok)
     }
 }

@@ -40,7 +40,10 @@ def torque_to_dipole(torque: FloatArray, b_body: FloatArray) -> FloatArray:
 
 
 def saturate(m: FloatArray, max_dipole: FloatArray) -> tuple[FloatArray, bool]:
-    """Scale the whole dipole vector so no coil exceeds its limit, keeping its direction."""
+    """Scale the whole dipole vector so no coil exceeds its limit, keeping its direction. A
+    non-finite command (only possible from non-finite inputs) becomes zero: coils off."""
+    if not np.all(np.isfinite(m)):
+        return np.zeros(3), False
     ratio = float(np.max(np.abs(m) / max_dipole))
     if ratio <= 1.0:
         return m, False
@@ -53,12 +56,16 @@ class ModeController:
 
     ``DETUMBLE`` above ``detumble_enter_rate`` until the rate drops below
     ``detumble_exit_rate``, then ``ESTIMATE`` (coils off) for ``settle_time``, then
-    ``POINT``. ``SAFE`` (coils off) on a bad input or a filter reset. With control disabled
+    ``POINT``. ``SAFE`` (coils off) on a bad input or a filter reset; once the inputs are good
+    again the controller resumes the mode SAFE interrupted, with its timer, so one corrupt
+    packet neither aborts detumbling nor restarts the settle time. With control disabled
     the mode stays ``ESTIMATE``.
     """
 
     mode: AdcsMode = AdcsMode.ESTIMATE
     mode_time: float = 0.0
+    resume_mode: AdcsMode = AdcsMode.ESTIMATE
+    resume_time: float = 0.0
     b_prev: FloatArray | None = None
     m_prev: FloatArray = field(default_factory=lambda: np.zeros(3))
 
@@ -71,29 +78,44 @@ class ModeController:
         w: FloatArray,
         b_body: FloatArray,
         status: AdcsStatus,
+        b_dot: FloatArray | None = None,
     ) -> tuple[AdcsMode, FloatArray, AdcsStatus]:
-        """New mode and dipole command from the current estimate (``b_body`` in tesla)."""
+        """New mode and dipole command from the current estimate (``b_body`` in tesla).
+        ``b_dot`` is the field's rate of change for B-dot; without it, the difference of
+        successive ``b_body`` is used."""
         rate = float(np.linalg.norm(w))
+        in_safe = self.mode == AdcsMode.SAFE
+        prev = self.resume_mode if in_safe else self.mode
+        prev_time = self.resume_time if in_safe else self.mode_time
         if status & (AdcsStatus.BAD_INPUT | AdcsStatus.COVARIANCE_RESET):
             mode = AdcsMode.SAFE
         elif not cfg.control_enabled:
             mode = AdcsMode.ESTIMATE
-        elif self.mode in (AdcsMode.ESTIMATE, AdcsMode.POINT, AdcsMode.SAFE, AdcsMode.OFF):
+        elif prev != AdcsMode.DETUMBLE:
             if rate > cfg.detumble_enter_rate:
                 mode = AdcsMode.DETUMBLE
-            elif self.mode == AdcsMode.POINT or (
-                self.mode == AdcsMode.ESTIMATE and self.mode_time >= cfg.settle_time
+            elif prev == AdcsMode.POINT or (
+                prev == AdcsMode.ESTIMATE and prev_time >= cfg.settle_time
             ):
                 mode = AdcsMode.POINT
             else:
                 mode = AdcsMode.ESTIMATE
         else:  # DETUMBLE
             mode = AdcsMode.ESTIMATE if rate < cfg.detumble_exit_rate else AdcsMode.DETUMBLE
-        self.mode_time = self.mode_time + dt if mode == self.mode else 0.0
+        if mode == AdcsMode.SAFE:
+            if not in_safe:
+                self.resume_mode, self.resume_time = self.mode, self.mode_time
+                self.mode_time = 0.0
+            else:
+                self.mode_time += dt
+        else:
+            self.mode_time = prev_time + dt if mode == prev else 0.0
         self.mode = mode
 
         m = np.zeros(3)
-        if mode == AdcsMode.DETUMBLE and self.b_prev is not None:
+        if mode == AdcsMode.DETUMBLE and b_dot is not None:
+            m = bdot(b_dot, cfg.bdot_gain)
+        elif mode == AdcsMode.DETUMBLE and self.b_prev is not None:
             m = bdot((b_body - self.b_prev) / dt, cfg.bdot_gain)
         elif mode == AdcsMode.POINT:
             tau = quaternion_feedback(q, cfg.q_target, w, cfg.kp, cfg.kd)

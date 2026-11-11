@@ -26,8 +26,10 @@ extern "C" {
 #define ADCS_API
 #endif
 
-/* Version of this interface. Incremented on any change to the exported structs or functions. */
-#define ADCS_ABI_VERSION 3u
+/* Version of this interface. Incremented on any change to the exported structs or functions.
+ * The precision is not part of it: a caller also checks adcs_real_size() == sizeof(adcs_real)
+ * (see adcs_check_abi below). */
+#define ADCS_ABI_VERSION 4u
 
 #ifdef ADCS_USE_FLOAT
 typedef float adcs_real;
@@ -52,17 +54,19 @@ typedef enum {
     ADCS_MODE_DETUMBLE = 1, /* B-dot */
     ADCS_MODE_ESTIMATE = 2, /* estimation only, coils off */
     ADCS_MODE_POINT = 3,    /* quaternion-feedback pointing */
-    ADCS_MODE_SAFE = 4      /* invalid data or filter failure: coils off, filter restarts */
+    ADCS_MODE_SAFE = 4      /* invalid data or filter failure: coils off; the interrupted mode
+                               resumes, with its timer, once the inputs are good again */
 } adcs_mode;
 
 /* Status flags (bit mask) of the last step. 0 means nominal. */
-#define ADCS_STATUS_BAD_INPUT (1u << 0)       /* NaN/Inf in an input marked valid */
+#define ADCS_STATUS_BAD_INPUT (1u << 0) /* NaN/Inf or implausible value in an input marked valid */
 #define ADCS_STATUS_NO_ATTITUDE_FIX (1u << 1) /* fewer than two vectors: FLAE not run */
 #define ADCS_STATUS_FLAE_FAILED (1u << 2)     /* FLAE did not converge or was degenerate */
 #define ADCS_STATUS_COVARIANCE_RESET (1u << 3) /* covariance lost positive definiteness */
 #define ADCS_STATUS_DIPOLE_SATURATED (1u << 4)
 #define ADCS_STATUS_NOT_INITIALISED (1u << 5) /* adcs_step called before adcs_init */
 #define ADCS_STATUS_BIAS_FAULT (1u << 6)      /* MEKF: a sensor-bias fault was declared */
+#define ADCS_STATUS_RATE_PROPAGATED (1u << 7) /* MEKF: no gyro; rate propagated by dynamics */
 
 typedef struct {
     uint32_t variant;     /* adcs_variant */
@@ -100,9 +104,11 @@ typedef struct {
     adcs_real fault_gyro_bias_sigma;  /* uncertainties added on a fault */
     adcs_real fault_mag_bias_sigma;
     adcs_real fault_attitude_sigma;
+    adcs_real sigma_outage_accel; /* rad/s^2: rate uncertainty growth while the gyro is out */
 
     /* Control */
-    bool control_enabled; /* false: estimation only (the thesis cases) */
+    uint8_t control_enabled; /* 0: estimation only (the thesis cases); flags are bytes, not
+                                bool, so any value a foreign caller passes is valid */
     adcs_real bdot_gain;  /* m = -k dB/dt (A m^2 s / T) */
     adcs_real kp;         /* quaternion-feedback gains, tau = -kp sign(dq4) dq - kd w */
     adcs_real kd;
@@ -115,11 +121,11 @@ typedef struct {
 typedef struct {
     adcs_real t;          /* s since start */
     adcs_real mag_b[3];   /* magnetometer reading, body frame (T) */
-    bool mag_valid;
+    uint8_t mag_valid;    /* non-zero: the reading is usable */
     adcs_real gyro_b[3];  /* gyroscope reading, body frame (rad/s) */
-    bool gyro_valid;
+    uint8_t gyro_valid;
     adcs_real sun_b[3];   /* sun direction from the sun sensors, body frame (unit vector) */
-    bool sun_valid;
+    uint8_t sun_valid;
     adcs_real sun_ref_i[3]; /* sun direction from the on-board ephemeris, inertial (unit) */
     adcs_real mag_ref_i[3]; /* geomagnetic field from the on-board model, inertial (T) */
 } adcs_input;
@@ -145,16 +151,28 @@ typedef struct adcs_state adcs_state;
 /* Returns ADCS_ABI_VERSION as compiled into the library. */
 ADCS_API uint32_t adcs_abi_version(void);
 
+/* sizeof(adcs_real) in the library: 8 (double) or 4 (float, ADCS_USE_FLOAT). */
+ADCS_API size_t adcs_real_size(void);
+
 /* Size in bytes of adcs_state. */
 ADCS_API size_t adcs_state_size(void);
 
-/* Initialises the state from a configuration. Returns 0 on success, nonzero if the
- * configuration is invalid. */
+/* Initialises the state from a configuration (the rules are in docs/adcs.md, "Configuration
+ * rules"). Returns 0 on success; -1 for a null pointer, -2 for misaligned state memory, -3 for
+ * an invalid configuration. Whenever `state` is non-null and aligned it is marked
+ * uninitialised first, so a later adcs_step on it fails cleanly. */
 ADCS_API int adcs_init(adcs_state *state, const adcs_config *config);
 
 /* Processes one control period. Returns 0 on success, nonzero on a programming error
- * (null pointers, not initialised). Data problems are reported in out->status instead. */
+ * (null pointers, misaligned or not initialised state). Data problems are reported in
+ * out->status instead. */
 ADCS_API int adcs_step(adcs_state *state, const adcs_input *in, adcs_output *out);
+
+/* Whether the linked library matches this header (version and precision). */
+static inline bool adcs_check_abi(void)
+{
+    return adcs_abi_version() == ADCS_ABI_VERSION && adcs_real_size() == sizeof(adcs_real);
+}
 
 #ifdef __cplusplus
 }

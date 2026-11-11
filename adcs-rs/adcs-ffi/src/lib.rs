@@ -22,6 +22,13 @@ pub extern "C" fn adcs_abi_version() -> u32 {
     adcs_core::ABI_VERSION
 }
 
+/// `sizeof(adcs_real)`: 8, or 4 with the `f32` feature. A caller checks it against its own
+/// header, since the ABI version does not include the precision.
+#[unsafe(no_mangle)]
+pub extern "C" fn adcs_real_size() -> usize {
+    size_of::<adcs_core::Real>()
+}
+
 /// Size in bytes of the state the caller must provide.
 #[unsafe(no_mangle)]
 pub extern "C" fn adcs_state_size() -> usize {
@@ -41,7 +48,7 @@ fn aligned(state: *mut c_void) -> bool {
 /// valid `adcs_config`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn adcs_init(state: *mut c_void, config: *const Config) -> c_int {
-    if state.is_null() || config.is_null() {
+    if state.is_null() {
         return -1;
     }
     if !aligned(state) {
@@ -50,8 +57,12 @@ pub unsafe extern "C" fn adcs_init(state: *mut c_void, config: *const Config) ->
     let state = state.cast::<Adcs>();
     // SAFETY: `state` is non-null, aligned (checked above) and points to enough writable
     // memory (caller contract). `write` does not read or drop the previous contents, which
-    // may be uninitialised.
+    // may be uninitialised. Writing before the config check means a later adcs_step on a
+    // failed init reads an initialised, unmarked state and fails cleanly.
     unsafe { state.write(Adcs::new()) };
+    if config.is_null() {
+        return -1;
+    }
     // SAFETY: the memory now holds a valid `Adcs`, and the caller guarantees exclusive
     // access for the duration of the call. `config` is non-null and points to a valid
     // `adcs_config` (caller contract); `Config` has the same layout and every bit pattern
@@ -81,13 +92,21 @@ pub unsafe extern "C" fn adcs_step(
     if out.is_null() {
         return -1;
     }
-    let result = if state.is_null() || input.is_null() || !aligned(state) {
+    // SAFETY (for the read): non-null and aligned (checked first); the magic number is the
+    // first field of the `repr(C)` `Adcs`, and the caller provides at least
+    // `adcs_state_size()` initialised bytes (memory given to `adcs_init`, or e.g. zeroed). It
+    // is read as a plain `u32` before any reference to an `Adcs` exists.
+    let result = if state.is_null()
+        || input.is_null()
+        || !aligned(state)
+        || unsafe { state.cast::<u32>().read() } != adcs_core::MAGIC
+    {
         Err(())
     } else {
-        // SAFETY: non-null and aligned (checked above); the caller guarantees the memory
-        // holds an `Adcs` written by `adcs_init` (or initialised bytes, which the magic
-        // number then rejects) and exclusive access. `input` is non-null and points to a
-        // valid `adcs_input`, whose fields accept every bit pattern.
+        // SAFETY: the magic number is only ever written by `adcs_init` after it has written a
+        // complete, valid `Adcs` (caller contract: nothing else writes this memory), and the
+        // caller guarantees exclusive access. `input` is non-null and points to a valid
+        // `adcs_input`, whose fields accept every bit pattern.
         let (adcs, input) = unsafe { (&mut *state.cast::<Adcs>(), &*input) };
         adcs.step(input).map_err(|_| ())
     };
@@ -100,10 +119,21 @@ pub unsafe extern "C" fn adcs_step(
     rc
 }
 
+/// No panic is expected (no allocation, indices fixed by array sizes). If one happened on a
+/// microcontroller, trap: the fault handler or watchdog resets the board, instead of a
+/// silent loop that leaves the coils on their last command.
 #[cfg(all(not(feature = "std"), not(test)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    loop {}
+    #[cfg(target_arch = "arm")]
+    // SAFETY: `udf` raises an undefined-instruction exception; it never returns.
+    unsafe {
+        core::arch::asm!("udf #0", options(noreturn));
+    }
+    #[cfg(not(target_arch = "arm"))]
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 #[cfg(test)]

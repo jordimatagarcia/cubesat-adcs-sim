@@ -37,6 +37,8 @@ class AdcsStatus(IntFlag):
     DIPOLE_SATURATED = 1 << 4
     NOT_INITIALISED = 1 << 5
     BIAS_FAULT = 1 << 6
+    RATE_PROPAGATED = 1 << 7
+    """MEKF: the gyro is unavailable and the rate is propagated with the dynamics."""
 
 
 @dataclass(frozen=True)

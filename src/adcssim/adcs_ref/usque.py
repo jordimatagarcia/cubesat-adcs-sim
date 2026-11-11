@@ -128,9 +128,12 @@ class Usque:
         mag_ut: FloatArray,
         mag_i_ut: FloatArray,
         mag_available: bool,
+        extra_attitude_var: float = 0.0,
+        freeze_gyro_bias: bool = False,
     ) -> bool:
         """Propagate over ``dt`` with the measured rate ``gyro`` (held constant over the
-        step), then update. Returns False if the covariance had to be reset."""
+        step), then update. ``extra_attitude_var`` and ``freeze_gyro_bias`` as in
+        :meth:`Mekf.step`. Returns False if the covariance had to be reset."""
         ok = True
         q_bar = self.process_noise(dt)
         lower = robust_cholesky((NX + self.lam) * (self.p + q_bar))
@@ -150,6 +153,7 @@ class Usque:
         x_pred = self._mean(chi_prop)
         dev = chi_prop - x_pred
         p_pred = self._cov(dev, dev) + q_bar
+        p_pred[ATT, ATT] += np.eye(3) * extra_attitude_var
 
         # Predicted measurements.
         a = quat_to_dcm(q_prop)  # (2n + 1, 3, 3)
@@ -164,8 +168,13 @@ class Usque:
         p_xy = self._cov(dev, gdev)
         gain = np.linalg.solve(p_yy.T, p_xy.T).T
         innov = y - y_hat
+        if freeze_gyro_bias:
+            gain[GYRO, :] = 0.0
+            # general form, valid for a sub-optimal gain
+            p_upd = p_pred - gain @ p_xy.T - p_xy @ gain.T + gain @ p_yy @ gain.T
+        else:
+            p_upd = p_pred - gain @ p_yy @ gain.T
         x_upd = x_pred + gain @ innov
-        p_upd = p_pred - gain @ p_yy @ gain.T
         p_upd = 0.5 * (p_upd + p_upd.T)
         self.last_update = UsqueUpdate(
             innovation=np.where(available, innov, np.nan),
@@ -175,8 +184,9 @@ class Usque:
         )
 
         if not (np.all(np.isfinite(x_upd)) and np.all(np.isfinite(p_upd))):
+            # Keep the propagated attitude and the bias estimates, like the MEKF.
+            self.q_ref = q0_prop / np.linalg.norm(q0_prop)
             self.p = self.p0.copy()
-            self.x = np.zeros(NX)
             return False
         # Fold the attitude error into the reference quaternion.
         self.q_ref = quat_mul(grp_to_quat(x_upd[ATT]), q0_prop)

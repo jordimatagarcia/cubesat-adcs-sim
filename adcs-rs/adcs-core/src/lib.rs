@@ -32,11 +32,11 @@ pub mod quat;
 pub mod real;
 pub mod tsukf;
 
-pub use adcs::{Adcs, InvalidConfig, NotInitialised};
+pub use adcs::{Adcs, InvalidConfig, MAGIC, NotInitialised};
 pub use real::Real;
 
 /// Version of the C interface defined in `adcs-c/include/adcs.h` (`ADCS_ABI_VERSION`).
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 #[cfg(test)]
 mod tests {

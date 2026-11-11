@@ -204,6 +204,9 @@ static void test_control_laws(void)
     CHECK_NEAR(big[1], 0.025, TOL);
     adcs_real small[3] = {0.01, 0, 0};
     CHECK(!control_saturate(small, max_dipole));
+    adcs_real nan_cmd[3] = {(adcs_real)NAN, 0.01, 0}; /* non-finite: coils off */
+    CHECK(!control_saturate(nan_cmd, max_dipole));
+    CHECK(nan_cmd[0] == 0 && nan_cmd[1] == 0 && nan_cmd[2] == 0);
 }
 
 static adcs_config valid_config(void)
@@ -226,13 +229,83 @@ static adcs_config valid_config(void)
     for (int i = 0; i < ADCS_NB; i++) {
         c.p_b0[i] = 1e-6;
     }
+    c.sigma_gyro_noise = 1e-4;
     c.sigma_mag_noise = 0.1;
     c.sigma_sun_noise = 1e-3;
     c.p0_attitude = c.p0_gyro_bias = c.p0_mag_bias = 0.1;
     c.fault_nis_threshold = 25;
     c.fault_steps = 3;
+    c.fault_gyro_bias_sigma = c.fault_mag_bias_sigma = c.fault_attitude_sigma = 0.1;
+    c.sigma_outage_accel = 1e-3;
     c.q_target[3] = 1;
     return c;
+}
+
+/* The configuration rules shared with the Python reference (config_problems). */
+static void test_config_rules(void)
+{
+    void *mem = aligned_alloc(alignof(max_align_t), (adcs_state_size() + 15) / 16 * 16);
+    adcs_state *s = (adcs_state *)mem;
+    adcs_config c = valid_config();
+    CHECK(adcs_init(s, &c) == 0);
+    c.variant = ADCS_VARIANT_THESIS;
+    CHECK(adcs_init(s, &c) == 0);
+#define REJECTS(field_change)                                                                \
+    do {                                                                                     \
+        c = valid_config();                                                                  \
+        field_change;                                                                        \
+        CHECK(adcs_init(s, &c) == -3);                                                       \
+    } while (0)
+    REJECTS(c.dt = 0);
+    REJECTS(c.dt = 20);
+    REJECTS(c.inertia[8] = -0.007);
+    REJECTS(c.inertia[1] = 0.01); /* not symmetric */
+    REJECTS(c.max_dipole[1] = 0);
+    REJECTS(c.flae_max_iterations = 0);
+    REJECTS(c.flae_max_iterations = 5000);
+    REJECTS(c.kp = (adcs_real)1e306);
+    REJECTS(c.detumble_exit_rate = 1; c.detumble_enter_rate = (adcs_real)0.5);
+    REJECTS(c.q_target[3] = 2);
+    REJECTS(c.fault_steps = 0);
+    REJECTS(c.fault_gyro_bias_sigma = 0);
+    REJECTS(c.sigma_gyro_noise = 0);
+    REJECTS(c.sigma_outage_accel = -1);
+    REJECTS(c.variant = ADCS_VARIANT_THESIS; c.process_dt = (adcs_real)1e-6);
+    REJECTS(c.variant = ADCS_VARIANT_THESIS; c.ukf_alpha = (adcs_real)1e-6);
+    REJECTS(c.variant = ADCS_VARIANT_THESIS; c.v[2] = 0);
+#undef REJECTS
+    free(mem);
+}
+
+/* Newton from Σ a|b||r| finds the largest eigenvalue for non-unit vectors too (from λ = 1 it
+ * converged to a smaller root above length ~1.5 and returned a 180°-wrong attitude). */
+static void test_flae_long_vectors(void)
+{
+    adcs_real q[4] = {0.3, -0.5, 0.1, 0.8};
+    quat_normalize(q);
+    const adcs_real ref[6] = {0.6, 0.8, 0, 0, 0, 1};
+    adcs_real body[6];
+    quat_rotate(q, &ref[0], &body[0]);
+    quat_rotate(q, &ref[3], &body[3]);
+    const adcs_real scales[4] = {1.5, 1.8, 2.0, 0.5};
+    for (int k = 0; k < 4; k++) {
+        adcs_real longer[6];
+        for (int i = 0; i < 3; i++) {
+            longer[i] = body[i] * scales[k];
+            longer[3 + i] = body[3 + i];
+        }
+        flae_result res;
+        CHECK(flae2(longer, ref, (const adcs_real[2]){1, 1}, NULL, 1e-12, 50, &res) == 0);
+        const adcs_real d =
+            res.q[0] * q[0] + res.q[1] * q[1] + res.q[2] * q[2] + res.q[3] * q[3];
+        CHECK_NEAR(fabs(d), 1, 1e-9);
+    }
+}
+
+static void test_abi_precision(void)
+{
+    CHECK(adcs_real_size() == sizeof(adcs_real));
+    CHECK(adcs_check_abi());
 }
 
 static void test_api_misuse(void)
@@ -278,7 +351,8 @@ static void test_api_misuse(void)
         for (int i = 0; i < 3; i++) {
             in.mag_b[i] = in.gyro_b[i] = in.sun_b[i] = in.sun_ref_i[i] = in.mag_ref_i[i] = (adcs_real)NAN;
         }
-        in.mag_valid = in.gyro_valid = in.sun_valid = true;
+        in.mag_valid = in.sun_valid = 1;
+        in.gyro_valid = 2; /* any non-zero byte means valid */
         CHECK(adcs_step(s, &in, &out) == 0);
         CHECK(out.status & ADCS_STATUS_BAD_INPUT);
         memset(&in, 0, sizeof in);
@@ -298,5 +372,8 @@ int main(void)
     RUN(test_flae_rejects_degenerate_input);
     RUN(test_control_laws);
     RUN(test_api_misuse);
+    RUN(test_config_rules);
+    RUN(test_flae_long_vectors);
+    RUN(test_abi_precision);
     return check_summary();
 }

@@ -115,7 +115,10 @@ int flae2(const adcs_real v_body[6], const adcs_real v_ref[6], const adcs_real w
     adcs_real work[16];
     const adcs_real tau3 = la_det(4, w, work);
 
-    adcs_real lam = (adcs_real)1;
+    /* Newton from Σ a |b| |r|, an upper bound of λmax: from above it converges monotonically to
+     * the largest root (λ = 1 assumed unit vectors, and could converge to a smaller root). */
+    adcs_real lam = a[0] * v3_norm(&v_body[0]) * v3_norm(&v_ref[0]) +
+                    a[1] * v3_norm(&v_body[3]) * v3_norm(&v_ref[3]);
     uint32_t it = 0;
     int converged = 0;
     while (it < max_iterations) {

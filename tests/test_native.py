@@ -4,6 +4,7 @@ golden vectors and run closed-loop scenarios exactly like the Python reference.
 The libraries are built once per session with CMake and Cargo (skipped if the tool is
 missing), so these tests always exercise the current sources."""
 
+import ctypes
 import dataclasses
 import shutil
 import subprocess
@@ -13,12 +14,14 @@ import numpy as np
 import pytest
 
 from adcssim.adcs_ref.tuning import matched_improved_config
-from adcssim.backends import AdcsContext, AdcsStatus, create_backend
+from adcssim.backends import AdcsConfig, AdcsContext, AdcsStatus, create_backend
+from adcssim.backends.abi import config_to_c
 from adcssim.backends.native import LibraryNotFoundError, NativeAdcs, library_path
 from adcssim.golden import GoldenVector, compare
 from adcssim.runner import Simulation
 from adcssim.scenario import Scenario, load_scenario
 from tests.conftest import REPO
+from tests.test_review_fixes import BAD_CONFIGS, INERTIA, MAX_DIPOLE
 
 GOLDEN = sorted((REPO / "testdata" / "golden").glob("*/*.json"))
 
@@ -133,3 +136,28 @@ def test_missing_library_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("ADCSSIM_C_LIB", str(tmp_path / "nope.so"))
     with pytest.raises(LibraryNotFoundError, match="ADCSSIM_C_LIB"):
         library_path("c")
+
+
+@pytest.mark.parametrize("case", BAD_CONFIGS, ids=[r for r, *_ in BAD_CONFIGS])
+def test_libraries_reject_what_the_reference_rejects(
+    library: tuple[str, Path], case: tuple[str, dict[str, object], dict[str, object]]
+) -> None:
+    """One configuration rule set: every configuration the Python reference rejects,
+    adcs_init rejects too. The bad value is set on the C struct directly, so this also
+    covers values Python already refuses when building the config object."""
+    _, cfg_changes, ctx_changes = case
+    adcs = NativeAdcs(*library)
+    base = AdcsConfig(variant=str(cfg_changes.get("variant", "thesis")))
+    c_cfg = config_to_c(base, 0.1, INERTIA, MAX_DIPOLE)
+    state = ctypes.addressof(adcs._state)
+    assert adcs.lib.adcs_init(state, ctypes.byref(c_cfg)) == 0  # the valid default
+    for name, value in (cfg_changes | ctx_changes).items():
+        if name == "variant":
+            continue
+        field = getattr(c_cfg, name)
+        if isinstance(field, ctypes.Array):
+            data = np.asarray(value, dtype=np.float64).ravel()
+            setattr(c_cfg, name, type(field)(*data))
+        else:
+            setattr(c_cfg, name, value)
+    assert adcs.lib.adcs_init(state, ctypes.byref(c_cfg)) == -3

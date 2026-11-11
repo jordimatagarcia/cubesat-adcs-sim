@@ -72,6 +72,7 @@ fn config(variant: u32, control: bool) -> Config {
     c.fault_gyro_bias_sigma = 0.1;
     c.fault_mag_bias_sigma = 50.0;
     c.fault_attitude_sigma = 0.05;
+    c.sigma_outage_accel = 1e-3;
     c.control_enabled = u8::from(control);
     c.bdot_gain = 4e4;
     c.kp = 2e-5;
@@ -117,7 +118,7 @@ fuzz_target!(|data: &[u8]| {
             fields[op] = f64::from_le_bytes(rec[1..9].try_into().unwrap());
         }
         let out = adcs.step(&to_input(&fields)).expect("initialised");
-        assert!(out.mode <= MODE_SAFE && out.status & !0x7f == 0);
+        assert!(out.mode <= MODE_SAFE && out.status & !0xff == 0);
         let n2: f64 = out.q_est.iter().map(|x| x * x).sum();
         assert!(out.q_est.iter().all(|x| x.is_nan()) || (n2 - 1.0).abs() < 1e-6);
         for (m, max) in out.m_cmd.iter().zip(cfg.max_dipole) {

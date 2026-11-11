@@ -16,7 +16,13 @@ Designed from the diagnosis of the thesis variant (docs/results/diagnosis.md):
   re-estimate them. The logged fault flag says which innovation was larger (1 sun → likely
   gyro, 2 magnetometer).
 - The gyro is the rate input: no dynamics model, so unmodelled torques (control, duty
-  cycle, disturbances) don't enter the estimate.
+  cycle, disturbances) don't enter the estimate. While the gyro is unavailable the rate is
+  propagated with Euler's torque-free equations instead, the attitude uncertainty grows
+  with what they leave out (``sigma_outage_accel``), the gyro-bias estimate is frozen (it
+  cannot be observed without the gyro and would otherwise absorb the propagation error),
+  and the status reports ``RATE_PROPAGATED``.
+- B-dot uses Ḃ = −ω̂ × B with the bias-corrected rate, not the difference of successive
+  magnetometer readings, which is mostly noise at 10 Hz.
 """
 
 import numpy as np
@@ -24,7 +30,7 @@ from numpy.typing import NDArray
 
 from adcssim.adcs_ref.control import ModeController
 from adcssim.adcs_ref.flae import flae
-from adcssim.adcs_ref.limits import field_plausible, gyro_plausible, unit_plausible
+from adcssim.adcs_ref.limits import field_plausible, gyro_plausible, unit, unit_plausible
 from adcssim.adcs_ref.mekf import Mekf
 from adcssim.adcs_ref.usque import ATT, GYRO, MAG, Usque
 from adcssim.backends.base import AdcsContext, AdcsInput, AdcsMode, AdcsOutput, AdcsStatus
@@ -35,6 +41,35 @@ FloatArray = NDArray[np.float64]
 UT = 1e6
 
 FAULT_NONE, FAULT_GYRO, FAULT_MAG = 0, 1, 2
+
+
+def _euler_rate(w: FloatArray, inertia: FloatArray, inertia_inv: FloatArray) -> FloatArray:
+    """Torque-free Euler equations, ω̇ = I⁻¹ (−ω × Iω)."""
+    return np.asarray(inertia_inv @ np.cross(-w, inertia @ w), dtype=np.float64)
+
+
+def propagate_rate(
+    w: FloatArray, dt: float, inertia: FloatArray, inertia_inv: FloatArray
+) -> FloatArray:
+    """Body rate after ``dt`` without torques (one RK4 step)."""
+    k1 = _euler_rate(w, inertia, inertia_inv)
+    k2 = _euler_rate(w + 0.5 * dt * k1, inertia, inertia_inv)
+    k3 = _euler_rate(w + 0.5 * dt * k2, inertia, inertia_inv)
+    k4 = _euler_rate(w + dt * k3, inertia, inertia_inv)
+    return np.asarray(w + dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0, dtype=np.float64)
+
+
+OUTAGE_MAX_ATTITUDE_SIGMA = 0.25
+"""rad. The outage growth stops once an attitude variance reaches this σ²: beyond ~15° the
+attitude is effectively unknown, and larger values only make the filters' linearisation
+(MEKF) or sigma points (UKF, which spread past 180°) fail."""
+
+
+def outage_variance(sigma_accel: float, t0: float, t1: float) -> float:
+    """Attitude variance added from ``t0`` to ``t1`` seconds into a gyro outage. A rate
+    error growing as σ_α t gives an attitude error σ_α t²/2, so the variance grows as
+    (σ_α²/4) t⁴."""
+    return 0.25 * sigma_accel * sigma_accel * (t1 * t1 * t1 * t1 - t0 * t0 * t0 * t0)
 
 
 class ImprovedAdcs:
@@ -51,7 +86,11 @@ class ImprovedAdcs:
 
     def reset(self, ctx: AdcsContext) -> None:
         cfg = ctx.config
+        cfg.validate(ctx.dt, ctx.inertia, ctx.max_dipole)
         self.ctx = ctx
+        self.inertia = np.asarray(ctx.inertia, dtype=np.float64).reshape(3, 3)
+        self.inertia_inv = np.linalg.inv(self.inertia)
+        self.outage_time = 0.0
         noise = (
             cfg.sigma_gyro_noise,
             cfg.sigma_gyro_bias_walk,
@@ -88,10 +127,16 @@ class ImprovedAdcs:
             or (inp.gyro_valid and not gyro_ok)
         ):
             status |= AdcsStatus.BAD_INPUT
+        # The magnetometer reading itself (for B-dot) needs no reference model.
+        mag_reading_ok = inp.mag_valid and mag_plausible
         mag_ut = np.asarray(inp.mag_b, dtype=np.float64) * UT if mag_ok else np.zeros(3)
+        mag_meas_ut = (
+            np.asarray(inp.mag_b, dtype=np.float64) * UT if mag_reading_ok else np.zeros(3)
+        )
         mag_ref_ut = np.asarray(inp.mag_ref_i, dtype=np.float64) * UT if mag_ref_ok else np.zeros(3)
-        sun_b = np.asarray(inp.sun_b, dtype=np.float64) if sun_ok else np.zeros(3)
-        sun_ref = np.asarray(inp.sun_ref_i, dtype=np.float64) if sun_ref_ok else np.zeros(3)
+        # Directions are normalised: the plausibility check accepts lengths 0.5–2.
+        sun_b = unit(inp.sun_b) if sun_ok else np.zeros(3)
+        sun_ref = unit(inp.sun_ref_i) if sun_ref_ok else np.zeros(3)
         gyro = np.asarray(inp.gyro_b, dtype=np.float64) if gyro_ok else self.gyro_prev
 
         if not (sun_ok and mag_ok):
@@ -118,20 +163,46 @@ class ImprovedAdcs:
             self.filter.reset(res.q, p0)
             self.initialised = True
             self.gyro_prev = gyro
-            return self._finish(inp, status, gyro, mag_ut, mag_ok, res.q)
+            return self._finish(inp, status, gyro, mag_meas_ut, mag_reading_ok, res.q)
 
         # Propagate with the mean of the previous and current rate readings: the body rate
         # changes within a step (Euler coupling while tumbling), and holding the previous
         # reading constant leaves an O(ω̇ dt²) attitude error per step.
+        dt = self.ctx.dt
+        outage_var = 0.0
+        if gyro_ok:
+            self.outage_time = 0.0
+        else:
+            bias = self.filter.x[GYRO]
+            gyro = propagate_rate(self.gyro_prev - bias, dt, self.inertia, self.inertia_inv) + bias
+            t0 = self.outage_time
+            self.outage_time = t0 + dt
+            outage_var = outage_variance(cfg.sigma_outage_accel, t0, self.outage_time)
+            p = self.filter.p
+            largest = max(p[0, 0], p[1, 1], p[2, 2])
+            cap = OUTAGE_MAX_ATTITUDE_SIGMA * OUTAGE_MAX_ATTITUDE_SIGMA
+            outage_var = min(outage_var, max(0.0, cap - largest))
+            status |= AdcsStatus.RATE_PROPAGATED
         rate = 0.5 * (self.gyro_prev + gyro)
-        ok = self.filter.step(rate, self.ctx.dt, sun_b, sun_ref, sun_ok, mag_ut, mag_ref_ut, mag_ok)
+        ok = self.filter.step(
+            rate,
+            dt,
+            sun_b,
+            sun_ref,
+            sun_ok,
+            mag_ut,
+            mag_ref_ut,
+            mag_ok,
+            extra_attitude_var=outage_var,
+            freeze_gyro_bias=not gyro_ok,
+        )
         if not ok:
             status |= AdcsStatus.COVARIANCE_RESET
         self._detect_faults(sun_ok)
         if self.fault != FAULT_NONE:
             status |= AdcsStatus.BIAS_FAULT
         self.gyro_prev = gyro
-        return self._finish(inp, status, gyro, mag_ut, mag_ok, None)
+        return self._finish(inp, status, gyro, mag_meas_ut, mag_reading_ok, None)
 
     # ------------------------------------------------------------------------------------
     def _nis(self) -> tuple[float, float]:
@@ -177,6 +248,8 @@ class ImprovedAdcs:
         mag_ok: bool,
         q_flae: FloatArray | None,
     ) -> AdcsOutput:
+        """Control and output. ``mag_ut``/``mag_ok``: the magnetometer reading, usable for
+        B-dot whether or not the field model is available."""
         assert self.ctx is not None and self.filter is not None
         f = self.filter
         q = f.q_ref
@@ -195,12 +268,15 @@ class ImprovedAdcs:
             w,
             b_body,
             status,
+            b_dot=-np.cross(w, b_body),  # a fixed inertial field seen from the rotating body
         )
         cfg = self.config
         p = f.p
         p_diag = np.full(19, np.nan)
         p_diag[0:3] = np.diag(p)[ATT]  # attitude error variance per axis (rad²)
-        p_diag[10:13] = cfg.sigma_gyro_noise**2 + np.diag(p)[GYRO]  # rate = gyro − bias
+        rate_outage = cfg.sigma_outage_accel * self.outage_time
+        # rate = gyro − bias (+ the propagation uncertainty during a gyro outage)
+        p_diag[10:13] = cfg.sigma_gyro_noise**2 + np.diag(p)[GYRO] + rate_outage * rate_outage
         p_diag[13:16] = np.diag(p)[MAG]
         p_diag[16:19] = np.diag(p)[GYRO]
         return AdcsOutput(

@@ -322,7 +322,7 @@ int main(int argc, char **argv)
             (is_mekf ? mekf : thesis)[(*n)++] = v;
         }
     }
-    if (adcs_abi_version() != ADCS_ABI_VERSION || reps < 1) {
+    if (!adcs_check_abi() || reps < 1) {
         fprintf(stderr, "ABI mismatch or bad --reps\n");
         return 1;
     }

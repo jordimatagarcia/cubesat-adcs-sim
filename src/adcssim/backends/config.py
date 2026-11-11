@@ -95,7 +95,12 @@ class AdcsConfig:
     fault_mag_bias_sigma: float = 50.0
     """Magnetometer bias uncertainty (µT) after a detected fault."""
     fault_attitude_sigma: float = 0.05
-    """Attitude uncertainty (rad) after a detected gyro fault."""
+    """Attitude uncertainty (rad) added on every detected bias fault."""
+    sigma_outage_accel: float = 1e-3
+    """Angular-acceleration uncertainty (rad/s²) while the gyro is unavailable: the rate is
+    then propagated with Euler's torque-free equations, and this covers what they leave
+    out (coil and disturbance torques, inertia errors). 1e-3 rad/s² is about the largest
+    magnetorquer torque on a 3U CubeSat."""
     # Control
     control_enabled: bool = False
     bdot_gain: float = 4e4
@@ -139,6 +144,8 @@ class AdcsConfig:
         for name in positive:
             if not getattr(self, name) > 0.0:
                 raise ValueError(f"{name} must be positive")
+        if not self.sigma_outage_accel >= 0.0:
+            raise ValueError("sigma_outage_accel must be non-negative")
         if self.sigma_gyro_bias_walk < 0.0 or self.sigma_mag_bias_walk < 0.0:
             raise ValueError("bias random walks must be non-negative")
         if self.fault_steps < 1:
@@ -149,6 +156,13 @@ class AdcsConfig:
             raise ValueError("FLAE weights must be non-negative")
         if not 0.0 <= self.detumble_exit_rate <= self.detumble_enter_rate:
             raise ValueError("need 0 <= detumble_exit_rate <= detumble_enter_rate")
+
+    def validate(self, dt: float, inertia: Any, max_dipole: Any) -> None:
+        """The configuration rules shared by every implementation (Python, C, Rust): what
+        ``adcs_init`` accepts. Raises ``ValueError`` naming the first rule broken."""
+        problems = config_problems(self, dt, inertia, max_dipole)
+        if problems:
+            raise ValueError("invalid ADCS configuration: " + "; ".join(problems))
 
     @classmethod
     def from_table(cls, table: dict[str, Any]) -> "AdcsConfig":
@@ -164,3 +178,104 @@ class AdcsConfig:
             else:
                 raise ValueError(f"unknown key 'adcs.{key}'")
         return replace(cls(), **kwargs)
+
+
+MAX_PROCESS_STEPS = 1000
+"""Largest dt / process_dt: bounds the RK4 steps per filter step (and so its run time)."""
+MAX_FLAE_ITERATIONS = 1000
+ALPHA_RANGE = (1e-2, 1e2)
+"""ukf_alpha: below ~1e-4 the weights lose precision (n + λ = 3α² computed as n + (3α² − n))."""
+MAX_BDOT_GAIN = 1e9
+MAX_PD_GAIN = 1e3
+MAX_DT = 10.0
+
+
+def _finite(*values: float) -> bool:
+    return all(math.isfinite(float(v)) for v in values)
+
+
+def config_problems(cfg: AdcsConfig, dt: float, inertia: Any, max_dipole: Any) -> list[str]:
+    """Every rule of ``AdcsConfig.validate`` that ``cfg`` breaks. The C (``config_valid`` in
+    adcs-c/src/adcs.c) and Rust (``config_valid`` in adcs-rs/adcs-core/src/adcs.rs)
+    libraries implement the same rules; tests/test_native.py checks they agree."""
+    out: list[str] = []
+    inertia = np.asarray(inertia, dtype=np.float64).reshape(3, 3)
+    dipole = np.asarray(max_dipole, dtype=np.float64)
+    if not (_finite(dt) and 0.0 < dt <= MAX_DT):
+        out.append(f"dt must be in (0, {MAX_DT}] s")
+    if not np.all(np.isfinite(inertia)):
+        out.append("inertia must be finite")
+    else:
+        scale = float(np.max(np.abs(inertia)))
+        if float(np.max(np.abs(inertia - inertia.T))) > 1e-9 * scale:
+            out.append("inertia must be symmetric")
+        elif not _positive_definite(inertia):
+            out.append("inertia must be positive definite")
+    if dipole.shape != (3,) or not (np.all(np.isfinite(dipole)) and np.all(dipole > 0.0)):
+        out.append("max_dipole must be three positive values")
+    w = (cfg.flae_weight_sun, cfg.flae_weight_mag)
+    if not (_finite(*w) and min(w) >= 0.0 and _finite(w[0] + w[1]) and w[0] + w[1] > 0.0):
+        out.append("FLAE weights must be finite, non-negative, with a positive sum")
+    if not (_finite(cfg.flae_tolerance) and cfg.flae_tolerance > 0.0):
+        out.append("flae_tolerance must be positive")
+    if not 1 <= cfg.flae_max_iterations <= MAX_FLAE_ITERATIONS:
+        out.append(f"flae_max_iterations must be in [1, {MAX_FLAE_ITERATIONS}]")
+    if not (_finite(cfg.bdot_gain) and 0.0 <= cfg.bdot_gain <= MAX_BDOT_GAIN):
+        out.append(f"bdot_gain must be in [0, {MAX_BDOT_GAIN:g}]")
+    if not all(_finite(g) and 0.0 <= g <= MAX_PD_GAIN for g in (cfg.kp, cfg.kd)):
+        out.append(f"kp and kd must be in [0, {MAX_PD_GAIN:g}]")
+    rates = (cfg.detumble_exit_rate, cfg.detumble_enter_rate)
+    if not (_finite(*rates) and 0.0 <= rates[0] <= rates[1]):
+        out.append("need 0 <= detumble_exit_rate <= detumble_enter_rate")
+    if not (_finite(cfg.settle_time) and cfg.settle_time >= 0.0):
+        out.append("settle_time must be non-negative")
+    q = np.asarray(cfg.q_target, dtype=np.float64)
+    if not (np.all(np.isfinite(q)) and abs(float(np.linalg.norm(q)) - 1.0) <= 1e-6):
+        out.append("q_target must be a unit quaternion")
+    if cfg.variant == "thesis":
+        if not (_finite(cfg.process_dt) and cfg.process_dt > 0.0):
+            out.append("process_dt must be positive")
+        elif not dt / cfg.process_dt <= MAX_PROCESS_STEPS:
+            out.append(f"dt / process_dt must be at most {MAX_PROCESS_STEPS}")
+        if not (_finite(cfg.ukf_alpha) and ALPHA_RANGE[0] <= cfg.ukf_alpha <= ALPHA_RANGE[1]):
+            out.append(f"ukf_alpha must be in [{ALPHA_RANGE[0]:g}, {ALPHA_RANGE[1]:g}]")
+        for name in ("p_x0", "p_b0", "v"):
+            a = np.asarray(getattr(cfg, name))
+            if not (np.all(np.isfinite(a)) and np.all(a > 0.0)):
+                out.append(f"{name} must be positive")
+        for name in ("w_x", "w_b"):
+            a = np.asarray(getattr(cfg, name))
+            if not (np.all(np.isfinite(a)) and np.all(a >= 0.0)):
+                out.append(f"{name} must be non-negative")
+    else:
+        positive = (
+            "sigma_gyro_noise",
+            "sigma_mag_noise",
+            "sigma_sun_noise",
+            "p0_attitude",
+            "p0_gyro_bias",
+            "p0_mag_bias",
+            "fault_nis_threshold",
+            "fault_gyro_bias_sigma",
+            "fault_mag_bias_sigma",
+            "fault_attitude_sigma",
+        )
+        for name in positive:
+            v = getattr(cfg, name)
+            if not (_finite(v) and v > 0.0):
+                out.append(f"{name} must be positive")
+        for name in ("sigma_gyro_bias_walk", "sigma_mag_bias_walk", "sigma_outage_accel"):
+            v = getattr(cfg, name)
+            if not (_finite(v) and v >= 0.0):
+                out.append(f"{name} must be non-negative")
+        if cfg.fault_steps < 1:
+            out.append("fault_steps must be at least 1")
+    return out
+
+
+def _positive_definite(m: FloatArray) -> bool:
+    try:
+        np.linalg.cholesky(m)
+    except np.linalg.LinAlgError:
+        return False
+    return True

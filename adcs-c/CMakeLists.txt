@@ -25,8 +25,10 @@ if(ADCS_FUZZ)
     add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
     add_link_options(-fsanitize=address,undefined)
 elseif(ADCS_SANITIZE)
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
-    add_link_options(-fsanitize=address,undefined)
+    # float-cast-overflow is not part of GCC's "undefined" group; out-of-range float to
+    # integer conversions are undefined behaviour.
+    add_compile_options(-fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=address,undefined,float-cast-overflow)
 endif()
 
 set(ADCS_SOURCES
@@ -85,6 +87,12 @@ if(ADCS_BUILD_TESTS)
     add_test(NAME bench_smoke COMMAND bench --label smoke --reps 1
              ${CMAKE_CURRENT_SOURCE_DIR}/../testdata/golden/thesis/nominal.json
              ${CMAKE_CURRENT_SOURCE_DIR}/../testdata/golden/mekf/nominal.json)
+
+    # The bare-metal example, run on the host: the state fits its buffer and the ADCS runs.
+    add_executable(bare_metal_host examples/bare_metal.c)
+    target_compile_options(bare_metal_host PRIVATE ${ADCS_WARNINGS})
+    target_link_libraries(bare_metal_host PRIVATE adcs_c_static)
+    add_test(NAME bare_metal_example COMMAND bare_metal_host)
 
     add_executable(golden_runner tests/golden_runner.c tests/golden_io.c)
     target_compile_options(golden_runner PRIVATE ${ADCS_WARNINGS})

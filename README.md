@@ -32,7 +32,7 @@ that diagnosis:
 |---|---:|---:|
 | Magnetometer bias step (thesis case 2b) | 53° | 0.6° |
 | Eclipse with realistic sensors | 8.6° | 0.43° |
-| Detumbling | diverged | 0.58° |
+| Detumbling | diverged | 0.87° |
 
 Their uncertainty bounds the real error (it stays inside the filters' 3σ), but
 conservatively: the reported variance is 2–160× the actual squared error, so the filters
@@ -43,13 +43,13 @@ same inputs for both:
 
 | | C | Rust |
 |---|---:|---:|
-| Time per step, thesis / MEKF (x86-64, best build) | 11.3 / 1.19 µs (gcc LTO) | 13.8 / 1.21 µs |
-| Outputs | bit-identical | bit-identical |
-| Code size, Cortex-M4F, size-optimised | 19 KB | 36 KB |
-| State / stack per step (double) | 36 KB / 2.5 KB | 42 KB / 5.9 KB |
+| Time per step, thesis / MEKF (x86-64, best build) | 13.7 / 1.53 µs (gcc LTO) | 16.9 / 1.46 µs |
+| Outputs | bit-identical | bit-identical (apart from last-bit differences in sine and cosine) |
+| Code size, Cortex-M4F, size-optimised | 21 KB | 34 KB |
+| State / stack per step (double) | 36 KB / 2.5 KB | 42 KB / 5.1 KB |
 
 Speed is a draw (Rust matches clang, which shares its LLVM backend; gcc is fastest on the
-UKF); Rust costs memory and code size; the outputs are the same to the last bit.
+UKF, Rust on the MEKF); Rust costs memory and code size.
 
 ## Architecture
 

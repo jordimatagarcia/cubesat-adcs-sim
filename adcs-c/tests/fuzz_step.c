@@ -21,7 +21,7 @@
 
 #include "adcs.h"
 
-#define STATUS_MASK 0x7Fu
+#define STATUS_MASK 0xFFu
 
 static const double BASE_INPUT[19] = {
     0.0,  -1.450141663940126e-05, 2.7086103377968737e-05, 1.659670587303675e-05, 1.0,
@@ -74,6 +74,7 @@ static adcs_config base_config(uint32_t variant, bool control)
     c.fault_gyro_bias_sigma = 0.1;
     c.fault_mag_bias_sigma = 50;
     c.fault_attitude_sigma = 0.05;
+    c.sigma_outage_accel = 1e-3;
     c.control_enabled = control;
     c.bdot_gain = 4e4;
     c.kp = 2e-5;

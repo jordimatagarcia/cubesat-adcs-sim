@@ -92,7 +92,9 @@ impl Mekf {
         sigma_gyro_bias_walk: 0.0,
         sigma_mag_bias_walk: 0.0,
         r_diag: [0.0; NY],
-        q_ref: [0.0, 0.0, 0.0, 1.0],
+        // All zero, so the constant can be written in place (a non-zero field made LLVM copy
+        // the 8 KB constant through the stack); configure() sets the identity.
+        q_ref: [0.0; 4],
         x: [0.0; NX],
         p: [0.0; NX * NX],
         p0_diag: [0.0; NX],
@@ -148,9 +150,15 @@ impl Mekf {
     }
 
     /// Propagates over `dt` with the rate gyro (rad/s), then updates with the vectors (unit
-    /// sun, field in µT). Returns false if the result was not finite and the covariance was
-    /// reset.
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    /// sun, field in µT). `extra_attitude_var` (rad²) is added to the attitude variance (gyro
+    /// outage); with `freeze_gyro_bias` the update leaves the gyro-bias estimate unchanged
+    /// (zero gain rows; the Joseph form keeps the covariance correct for that gain). Returns
+    /// false if the result was not finite and the covariance was reset.
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::fn_params_excessive_bools
+    )]
     pub fn step(
         &mut self,
         gyro: &[Real; 3],
@@ -161,6 +169,8 @@ impl Mekf {
         mag_ut: &[Real; 3],
         mag_i_ut: &[Real; 3],
         mag_available: bool,
+        extra_attitude_var: Real,
+        freeze_gyro_bias: bool,
     ) -> bool {
         let k = &mut self.work;
 
@@ -192,6 +202,9 @@ impl Mekf {
             k.p_pred[(GYRO + i) * NX + GYRO + i] += su2 * dt;
             k.p_pred[(MAG + i) * NX + MAG + i] +=
                 self.sigma_mag_bias_walk * self.sigma_mag_bias_walk * dt;
+        }
+        for i in 0..3 {
+            k.p_pred[(ATT + i) * NX + ATT + i] += extra_attitude_var;
         }
 
         // ---- update ---------------------------------------------------------------------
@@ -242,6 +255,9 @@ impl Mekf {
         }
         mul_bt(NX, NX, NY, &k.p_pred, &k.h, &mut k.pht);
         let solved = right_divide(NX, NY, &k.pht, &s, &mut k.gain, &mut k.solve);
+        if freeze_gyro_bias {
+            k.gain[GYRO * NY..(GYRO + 3) * NY].fill(0.0);
+        }
         let mut innov = [0.0; NY];
         for i in 0..NY {
             innov[i] = y[i] - y_hat[i];

@@ -41,6 +41,13 @@ def unit_plausible(v: NDArray[np.float64]) -> bool:
     return n is not None and UNIT_MIN <= n <= UNIT_MAX
 
 
+def unit(v: object) -> NDArray[np.float64]:
+    """``v`` scaled to unit length. Directions are normalised after the plausibility check,
+    which accepts lengths 0.5–2 (FLAE and the vector measurements assume unit vectors)."""
+    a = np.asarray(v, dtype=np.float64)
+    return np.asarray(a / np.linalg.norm(a), dtype=np.float64)
+
+
 def safe_norm(n: float) -> float:
     """``n`` if it can be divided by, NaN otherwise (zero or overflowed), so a degenerate
     normalisation turns into NaN and the filter's finiteness check catches it."""

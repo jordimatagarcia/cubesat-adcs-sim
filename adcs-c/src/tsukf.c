@@ -18,6 +18,11 @@
 #define TINY ((adcs_real)1e-300)
 #endif
 
+/* Added to the diagonal before every factorisation. The double-precision epsilon in both
+ * precisions: float's (1.2e-7) is larger than the process noise on q and ω and would act as
+ * extra process noise, wrecking the single-precision filter. */
+#define CHOLESKY_EPS ((adcs_real)2.220446049250313e-16)
+
 static const adcs_real JITTER[4] = {(adcs_real)0, (adcs_real)1e-12, (adcs_real)1e-10,
                                     (adcs_real)1e-8};
 
@@ -69,7 +74,7 @@ static int robust_cholesky(const adcs_real *p, adcs_real *lower, adcs_real *tmp)
     for (size_t k = 0; k < 4; k++) {
         la_copy(NX * NX, tmp, p);
         for (size_t i = 0; i < NX; i++) {
-            LA_AT(tmp, NX, i, i) += LA_EPS + JITTER[k] * scale;
+            LA_AT(tmp, NX, i, i) += CHOLESKY_EPS + JITTER[k] * scale;
         }
         if (la_cholesky(NX, tmp, lower) == 0) {
             return 0;

@@ -33,6 +33,9 @@ typedef struct {
     mekf filter;
     adcs_real gyro_prev[3];
     uint32_t suspect_steps;
+    adcs_real inertia[9];
+    adcs_real inertia_inv[9];
+    adcs_real outage_time; /* s since the gyro became unavailable, 0 while it works */
 } mekf_state;
 
 struct adcs_state {
@@ -49,6 +52,11 @@ struct adcs_state {
 uint32_t adcs_abi_version(void)
 {
     return ADCS_ABI_VERSION;
+}
+
+size_t adcs_real_size(void)
+{
+    return sizeof(adcs_real);
 }
 
 size_t adcs_state_size(void)
@@ -141,35 +149,74 @@ static bool all_nonnegative(size_t n, const adcs_real *v)
     return true;
 }
 
+/* Configuration rules, the same in every implementation (config_problems in
+ * src/adcssim/backends/config.py; docs/adcs.md, "Configuration rules"). */
+#define MAX_DT ((adcs_real)10)
+#define MAX_PROCESS_STEPS ((adcs_real)1000) /* bounds the RK4 steps, and so the run time */
+#define MAX_FLAE_ITERATIONS 1000u
+#define ALPHA_MIN ((adcs_real)1e-2) /* smaller: the UT weights lose precision */
+#define ALPHA_MAX ((adcs_real)1e2)
+#define MAX_BDOT_GAIN ((adcs_real)1e9)
+#define MAX_PD_GAIN ((adcs_real)1e3)
+
+static bool in_range(adcs_real x, adcs_real lo, adcs_real hi)
+{
+    return isfinite(x) && x >= lo && x <= hi;
+}
+
+static bool inertia_valid(const adcs_real m[9])
+{
+    if (!la_all_finite(9, m)) {
+        return false;
+    }
+    adcs_real scale = (adcs_real)0, asym = (adcs_real)0, lower[9];
+    for (size_t i = 0; i < 9; i++) {
+        scale = LA_FABS(m[i]) > scale ? LA_FABS(m[i]) : scale;
+    }
+    for (size_t i = 0; i < 3; i++) {
+        for (size_t j = 0; j < 3; j++) {
+            const adcs_real d = LA_FABS(LA_AT(m, 3, i, j) - LA_AT(m, 3, j, i));
+            asym = d > asym ? d : asym;
+        }
+    }
+    return asym <= (adcs_real)1e-9 * scale && la_cholesky(3, m, lower) == 0;
+}
+
 static bool config_valid(const adcs_config *c)
 {
-    const adcs_real weights[] = {c->flae_weight_sun, c->flae_weight_mag};
-    const adcs_real control_values[] = {c->bdot_gain,          c->kp,
-                                        c->kd,                 c->detumble_enter_rate,
-                                        c->detumble_exit_rate, c->settle_time};
-    adcs_real work[9];
-    if (!(c->dt > (adcs_real)0) || !isfinite(c->dt) || !la_all_finite(9, c->inertia) ||
-        la_det(3, c->inertia, work) == (adcs_real)0 || !all_positive(3, c->max_dipole) ||
-        !all_nonnegative(2, weights) || !(weights[0] + weights[1] > (adcs_real)0) ||
-        !all_positive(1, &c->flae_tolerance) || !all_nonnegative(6, control_values) ||
-        !la_all_finite(4, c->q_target)) {
+    const adcs_real wsum = c->flae_weight_sun + c->flae_weight_mag;
+    const adcs_real qn = quat_norm(c->q_target);
+    if (!in_range(c->dt, (adcs_real)0, MAX_DT) || !(c->dt > (adcs_real)0) ||
+        !inertia_valid(c->inertia) || !all_positive(3, c->max_dipole) ||
+        !all_nonnegative(1, &c->flae_weight_sun) || !all_nonnegative(1, &c->flae_weight_mag) ||
+        !all_positive(1, &wsum) || !all_positive(1, &c->flae_tolerance) ||
+        c->flae_max_iterations < 1u || c->flae_max_iterations > MAX_FLAE_ITERATIONS ||
+        !in_range(c->bdot_gain, (adcs_real)0, MAX_BDOT_GAIN) ||
+        !in_range(c->kp, (adcs_real)0, MAX_PD_GAIN) || !in_range(c->kd, (adcs_real)0, MAX_PD_GAIN) ||
+        !all_nonnegative(1, &c->detumble_exit_rate) ||
+        !in_range(c->detumble_enter_rate, c->detumble_exit_rate, (adcs_real)INFINITY) ||
+        !all_nonnegative(1, &c->settle_time) || !la_all_finite(4, c->q_target) ||
+        !(LA_FABS(qn - (adcs_real)1) <= (adcs_real)1e-6)) {
         return false;
     }
     if (c->variant == ADCS_VARIANT_THESIS) {
-        return all_positive(1, &c->process_dt) && all_positive(1, &c->ukf_alpha) &&
-               all_positive(ADCS_NX, c->p_x0) && all_positive(ADCS_NB, c->p_b0) &&
-               all_nonnegative(ADCS_NX, c->w_x) && all_nonnegative(ADCS_NB, c->w_b) &&
-               all_positive(ADCS_NX, c->v);
+        return all_positive(1, &c->process_dt) && c->dt / c->process_dt <= MAX_PROCESS_STEPS &&
+               in_range(c->ukf_alpha, ALPHA_MIN, ALPHA_MAX) && all_positive(ADCS_NX, c->p_x0) &&
+               all_positive(ADCS_NB, c->p_b0) && all_positive(ADCS_NX, c->v) &&
+               all_nonnegative(ADCS_NX, c->w_x) && all_nonnegative(ADCS_NB, c->w_b);
     }
     if (c->variant == ADCS_VARIANT_MEKF) {
-        const adcs_real positive[] = {c->sigma_mag_noise, c->sigma_sun_noise, c->p0_attitude,
-                                      c->p0_gyro_bias,    c->p0_mag_bias};
-        const adcs_real nonnegative[] = {c->sigma_gyro_noise,      c->sigma_gyro_bias_walk,
-                                         c->sigma_mag_bias_walk,   c->fault_gyro_bias_sigma,
-                                         c->fault_mag_bias_sigma,  c->fault_attitude_sigma,
-                                         c->fault_nis_threshold};
+        const adcs_real positive[] = {
+            c->sigma_gyro_noise,     c->sigma_mag_noise,       c->sigma_sun_noise,
+            c->p0_attitude,          c->p0_gyro_bias,          c->p0_mag_bias,
+            c->fault_nis_threshold,  c->fault_gyro_bias_sigma, c->fault_mag_bias_sigma,
+            c->fault_attitude_sigma,
+        };
+        const adcs_real nonnegative[] = {c->sigma_gyro_bias_walk, c->sigma_mag_bias_walk,
+                                         c->sigma_outage_accel};
         return all_positive(sizeof positive / sizeof positive[0], positive) &&
-               all_nonnegative(sizeof nonnegative / sizeof nonnegative[0], nonnegative);
+               all_nonnegative(sizeof nonnegative / sizeof nonnegative[0], nonnegative) &&
+               c->fault_steps >= 1u;
     }
     return false;
 }
@@ -287,7 +334,7 @@ static void thesis_finish(adcs_state *s, uint32_t status, adcs_output *out)
     adcs_real b_body[3], m[3];
     div3(&x[TS_MAG], UT, b_body);
     const uint32_t mode =
-        control_update(&s->control, &s->cfg, &x[TS_Q], &x[TS_W], b_body, &status, m);
+        control_update(&s->control, &s->cfg, &x[TS_Q], &x[TS_W], b_body, NULL, &status, m);
     la_copy(3, t->m_prev, m);
     la_copy(4, out->q_est, &x[TS_Q]);
     la_copy(3, out->w_est, &x[TS_W]);
@@ -321,15 +368,19 @@ static void thesis_step(adcs_state *s, const adcs_input *in, adcs_output *out)
         status |= ADCS_STATUS_BAD_INPUT;
     }
     adcs_real mag_ut[3] = {0, 0, 0}, mag_ref_ut[3] = {0, 0, 0};
-    adcs_real sun_b[3] = {0, 0, 0}, gyro[3] = {0, 0, 0};
+    adcs_real sun_b[3] = {0, 0, 0}, sun_ref[3] = {0, 0, 0}, gyro[3] = {0, 0, 0};
     if (mag_ok) {
         scale3(in->mag_b, UT, mag_ut);
     }
     if (mag_ref_ok) {
         scale3(in->mag_ref_i, UT, mag_ref_ut);
     }
+    /* Directions are normalised: the plausibility check accepts lengths 0.5–2. */
     if (sun_ok) {
-        la_copy(3, sun_b, in->sun_b);
+        div3(in->sun_b, v3_norm(in->sun_b), sun_b);
+    }
+    if (sun_ref_ok) {
+        div3(in->sun_ref_i, v3_norm(in->sun_ref_i), sun_ref);
     }
     if (gyro_ok) {
         la_copy(3, gyro, in->gyro_b);
@@ -351,7 +402,7 @@ static void thesis_step(adcs_state *s, const adcs_input *in, adcs_output *out)
         adcs_real vb[6], vr[6];
         la_copy(3, &vb[0], sun_for_flae);
         div3(mag_ut, v3_norm(mag_ut), &vb[3]);
-        la_copy(3, &vr[0], in->sun_ref_i);
+        la_copy(3, &vr[0], sun_ref);
         div3(mag_ref_ut, v3_norm(mag_ref_ut), &vr[3]);
         const adcs_real weights[2] = {cfg->flae_weight_sun, cfg->flae_weight_mag};
         const adcs_real *prev = s->initialised       ? &t->filter.x[TS_Q]
@@ -413,6 +464,8 @@ static void thesis_step(adcs_state *s, const adcs_input *in, adcs_output *out)
 
 /* ---- MEKF variant ---------------------------------------------------------------------- */
 
+/* Control and output. mag_ut/mag_ok: the magnetometer reading, usable for B-dot whether or
+ * not the field model is available. */
 static void mekf_finish(adcs_state *s, const adcs_input *in, uint32_t status,
                         const adcs_real gyro[3], const adcs_real mag_ut[3], bool mag_ok,
                         adcs_output *out)
@@ -432,7 +485,15 @@ static void mekf_finish(adcs_state *s, const adcs_input *in, uint32_t status,
     } else {
         la_zero(3, b_body);
     }
-    const uint32_t mode = control_update(&s->control, cfg, f->q_ref, w, b_body, &status, m);
+    /* B-dot from Ḃ = −ω̂ × B: a fixed inertial field seen from the rotating body. */
+    adcs_real b_dot[3];
+    v3_cross(w, b_body, b_dot);
+    for (size_t i = 0; i < 3; i++) {
+        b_dot[i] = -b_dot[i];
+    }
+    const uint32_t mode =
+        control_update(&s->control, cfg, f->q_ref, w, b_body, b_dot, &status, m);
+    const adcs_real rate_outage = cfg->sigma_outage_accel * s->v.mekf.outage_time;
     la_copy(4, out->q_est, f->q_ref);
     la_copy(3, out->w_est, w);
     div3(&f->x[MEKF_MAG], UT, out->bias_mag);
@@ -443,13 +504,54 @@ static void mekf_finish(adcs_state *s, const adcs_input *in, uint32_t status,
     for (size_t i = 0; i < 3; i++) {
         const adcs_real pg = LA_AT(f->p, MEKF_NX, MEKF_GYRO + i, MEKF_GYRO + i);
         out->p_diag[i] = LA_AT(f->p, MEKF_NX, MEKF_ATT + i, MEKF_ATT + i); /* rad² */
-        out->p_diag[10 + i] = cfg->sigma_gyro_noise * cfg->sigma_gyro_noise + pg; /* rate */
+        /* rate = gyro − bias (+ the propagation uncertainty during a gyro outage) */
+        out->p_diag[10 + i] =
+            cfg->sigma_gyro_noise * cfg->sigma_gyro_noise + pg + rate_outage * rate_outage;
         out->p_diag[13 + i] = LA_AT(f->p, MEKF_NX, MEKF_MAG + i, MEKF_MAG + i);
         out->p_diag[16 + i] = pg;
     }
     la_copy(3, out->m_cmd, m);
     out->mode = mode;
     out->status = status;
+}
+
+/* The outage growth stops once an attitude variance reaches this σ² (rad): beyond ~15° the
+ * attitude is effectively unknown, and more would only break the linearisation. */
+#define OUTAGE_MAX_ATTITUDE_SIGMA ((adcs_real)0.25)
+
+/* Torque-free Euler equations, ω̇ = I⁻¹ (−ω × Iω). */
+static void euler_rate(const adcs_real w[3], const adcs_real *inertia,
+                       const adcs_real *inertia_inv, adcs_real out[3])
+{
+    adcs_real iw[3], g[3];
+    const adcs_real nw[3] = {-w[0], -w[1], -w[2]};
+    la_mul_vec(3, 3, inertia, w, iw);
+    v3_cross(nw, iw, g);
+    la_mul_vec(3, 3, inertia_inv, g, out);
+}
+
+/* Body rate after dt without torques (one RK4 step). */
+static void propagate_rate(const adcs_real w[3], adcs_real dt, const adcs_real *inertia,
+                           const adcs_real *inertia_inv, adcs_real out[3])
+{
+    adcs_real k1[3], k2[3], k3[3], k4[3], xt[3];
+    euler_rate(w, inertia, inertia_inv, k1);
+    for (size_t i = 0; i < 3; i++) {
+        xt[i] = w[i] + (adcs_real)0.5 * dt * k1[i];
+    }
+    euler_rate(xt, inertia, inertia_inv, k2);
+    for (size_t i = 0; i < 3; i++) {
+        xt[i] = w[i] + (adcs_real)0.5 * dt * k2[i];
+    }
+    euler_rate(xt, inertia, inertia_inv, k3);
+    for (size_t i = 0; i < 3; i++) {
+        xt[i] = w[i] + dt * k3[i];
+    }
+    euler_rate(xt, inertia, inertia_inv, k4);
+    for (size_t i = 0; i < 3; i++) {
+        out[i] = w[i] + dt * (k1[i] + (adcs_real)2 * k2[i] + (adcs_real)2 * k3[i] + k4[i]) /
+                            (adcs_real)6;
+    }
 }
 
 /* Declare a bias fault when the sun or magnetometer innovation stays too large: inflate the
@@ -491,19 +593,25 @@ static void mekf_variant_step(adcs_state *s, const adcs_input *in, adcs_output *
         (in->gyro_valid && !gyro_ok)) {
         status |= ADCS_STATUS_BAD_INPUT;
     }
-    adcs_real mag_ut[3] = {0, 0, 0}, mag_ref_ut[3] = {0, 0, 0};
+    /* The magnetometer reading itself (for B-dot) needs no reference model. */
+    const bool mag_reading_ok = in->mag_valid && mag_plausible;
+    adcs_real mag_ut[3] = {0, 0, 0}, mag_meas_ut[3] = {0, 0, 0}, mag_ref_ut[3] = {0, 0, 0};
     adcs_real sun_b[3] = {0, 0, 0}, sun_ref[3] = {0, 0, 0}, gyro[3];
     if (mag_ok) {
         scale3(in->mag_b, UT, mag_ut);
     }
+    if (mag_reading_ok) {
+        scale3(in->mag_b, UT, mag_meas_ut);
+    }
     if (mag_ref_ok) {
         scale3(in->mag_ref_i, UT, mag_ref_ut);
     }
+    /* Directions are normalised: the plausibility check accepts lengths 0.5–2. */
     if (sun_ok) {
-        la_copy(3, sun_b, in->sun_b);
+        div3(in->sun_b, v3_norm(in->sun_b), sun_b);
     }
     if (sun_ref_ok) {
-        la_copy(3, sun_ref, in->sun_ref_i);
+        div3(in->sun_ref_i, v3_norm(in->sun_ref_i), sun_ref);
     }
     la_copy(3, gyro, gyro_ok ? in->gyro_b : m->gyro_prev);
     if (!(sun_ok && mag_ok)) {
@@ -536,8 +644,40 @@ static void mekf_variant_step(adcs_state *s, const adcs_input *in, adcs_output *
         mekf_reset(&m->filter, res.q, p0);
         s->initialised = true;
         la_copy(3, m->gyro_prev, gyro);
-        mekf_finish(s, in, status, gyro, mag_ut, mag_ok, out);
+        mekf_finish(s, in, status, gyro, mag_meas_ut, mag_reading_ok, out);
         return;
+    }
+
+    /* Without the gyro, propagate the rate with the dynamics, grow the attitude uncertainty
+     * with what they leave out, and freeze the (unobservable) gyro-bias estimate. */
+    const adcs_real dt = cfg->dt;
+    adcs_real outage_var = (adcs_real)0;
+    if (gyro_ok) {
+        m->outage_time = (adcs_real)0;
+    } else {
+        adcs_real w_prev[3], w_new[3];
+        for (size_t i = 0; i < 3; i++) {
+            w_prev[i] = m->gyro_prev[i] - m->filter.x[MEKF_GYRO + i];
+        }
+        propagate_rate(w_prev, dt, m->inertia, m->inertia_inv, w_new);
+        for (size_t i = 0; i < 3; i++) {
+            gyro[i] = w_new[i] + m->filter.x[MEKF_GYRO + i];
+        }
+        const adcs_real t0 = m->outage_time;
+        m->outage_time = t0 + dt;
+        const adcs_real t1 = m->outage_time, sa = cfg->sigma_outage_accel;
+        /* rate error σ_α t → attitude error σ_α t²/2 → variance (σ_α²/4) t⁴ */
+        outage_var = (adcs_real)0.25 * sa * sa * (t1 * t1 * t1 * t1 - t0 * t0 * t0 * t0);
+        const adcs_real *p = m->filter.p;
+        adcs_real largest = LA_AT(p, MEKF_NX, 0, 0);
+        for (size_t i = 1; i < 3; i++) {
+            largest = LA_AT(p, MEKF_NX, i, i) > largest ? LA_AT(p, MEKF_NX, i, i) : largest;
+        }
+        const adcs_real room =
+            OUTAGE_MAX_ATTITUDE_SIGMA * OUTAGE_MAX_ATTITUDE_SIGMA - largest;
+        const adcs_real cap = room > (adcs_real)0 ? room : (adcs_real)0;
+        outage_var = outage_var < cap ? outage_var : cap;
+        status |= ADCS_STATUS_RATE_PROPAGATED;
     }
 
     /* Propagate with the mean of the previous and current rate readings: the body rate
@@ -546,28 +686,36 @@ static void mekf_variant_step(adcs_state *s, const adcs_input *in, adcs_output *
     for (size_t i = 0; i < 3; i++) {
         rate[i] = (adcs_real)0.5 * (m->gyro_prev[i] + gyro[i]);
     }
-    if (!mekf_step(&m->filter, rate, cfg->dt, sun_b, sun_ref, sun_ok, mag_ut, mag_ref_ut,
-                   mag_ok)) {
+    if (!mekf_step(&m->filter, rate, dt, sun_b, sun_ref, sun_ok, mag_ut, mag_ref_ut, mag_ok,
+                   outage_var, !gyro_ok)) {
         status |= ADCS_STATUS_COVARIANCE_RESET;
     }
     if (detect_fault(s, sun_ok)) {
         status |= ADCS_STATUS_BIAS_FAULT;
     }
     la_copy(3, m->gyro_prev, gyro);
-    mekf_finish(s, in, status, gyro, mag_ut, mag_ok, out);
+    mekf_finish(s, in, status, gyro, mag_meas_ut, mag_reading_ok, out);
 }
 
 /* ---- API ------------------------------------------------------------------------------- */
 
+static bool aligned(const adcs_state *state)
+{
+    return (uintptr_t)state % alignof(struct adcs_state) == 0;
+}
+
 int adcs_init(adcs_state *state, const adcs_config *config)
 {
-    if (state == NULL || config == NULL) {
+    if (state == NULL) {
         return -1;
     }
-    if ((uintptr_t)state % alignof(struct adcs_state) != 0) {
+    if (!aligned(state)) {
         return -2;
     }
-    state->magic = 0;
+    state->magic = 0; /* a later adcs_step on a failed init fails cleanly */
+    if (config == NULL) {
+        return -1;
+    }
     if (!config_valid(config)) {
         return -3;
     }
@@ -595,6 +743,12 @@ int adcs_init(adcs_state *state, const adcs_config *config)
                        config->sigma_sun_noise);
         la_zero(3, m->gyro_prev);
         m->suspect_steps = 0;
+        m->outage_time = (adcs_real)0;
+        adcs_real work[9];
+        la_copy(9, m->inertia, config->inertia);
+        if (la_inverse(3, config->inertia, m->inertia_inv, work) != 0) {
+            return -3;
+        }
     }
     state->magic = ADCS_MAGIC;
     return 0;
@@ -605,7 +759,8 @@ int adcs_step(adcs_state *state, const adcs_input *in, adcs_output *out)
     if (out == NULL) {
         return -1;
     }
-    if (state == NULL || in == NULL || state->magic != ADCS_MAGIC) {
+    if (state == NULL || in == NULL || !aligned(state) || state->magic != ADCS_MAGIC ||
+        (state->cfg.variant != ADCS_VARIANT_THESIS && state->cfg.variant != ADCS_VARIANT_MEKF)) {
         output_empty(out, ADCS_MODE_OFF, ADCS_STATUS_NOT_INITIALISED);
         return -1;
     }

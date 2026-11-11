@@ -13,17 +13,21 @@
 typedef struct {
     uint32_t mode; /* adcs_mode */
     adcs_real mode_time;
+    uint32_t resume_mode; /* the mode SAFE interrupted, resumed with its time */
+    adcs_real resume_time;
     adcs_real b_prev[3];
     bool has_b_prev;
 } control_state;
 
 void control_reset(control_state *c);
 
-/* New mode and dipole command from the current estimate (b_body in tesla). Returns the
- * mode; adds ADCS_STATUS_DIPOLE_SATURATED to *status when the command was scaled down. */
+/* New mode and dipole command from the current estimate (b_body in tesla). b_dot is the
+ * field's rate of change for B-dot, or NULL to use the difference of successive b_body.
+ * Returns the mode; adds ADCS_STATUS_DIPOLE_SATURATED to *status when the command was
+ * scaled down. */
 uint32_t control_update(control_state *c, const adcs_config *cfg, const adcs_real q[4],
-                        const adcs_real w[3], const adcs_real b_body[3], uint32_t *status,
-                        adcs_real m_out[3]);
+                        const adcs_real w[3], const adcs_real b_body[3],
+                        const adcs_real *b_dot, uint32_t *status, adcs_real m_out[3]);
 
 /* Exposed for the unit tests. */
 void control_quaternion_feedback(const adcs_real q[4], const adcs_real q_target[4],

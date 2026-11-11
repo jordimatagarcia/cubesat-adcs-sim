@@ -135,6 +135,7 @@ static const field CONFIG_FIELDS[] = {
     MEKF_FIELD(fault_gyro_bias_sigma),
     MEKF_FIELD(fault_mag_bias_sigma),
     MEKF_FIELD(fault_attitude_sigma),
+    MEKF_FIELD(sigma_outage_accel),
     {"control_enabled", offsetof(adcs_config, control_enabled), 1, BOOL, false},
     REAL_FIELD(bdot_gain, 1),
     REAL_FIELD(kp, 1),
@@ -173,7 +174,7 @@ static int read_config(const char *text, adcs_config *cfg)
             } else if (fd->kind == U32) {
                 *(uint32_t *)(void *)(base + fd->offset) = (uint32_t)values[0];
             } else {
-                *(bool *)(void *)(base + fd->offset) = values[0] != 0.0;
+                *(uint8_t *)(void *)(base + fd->offset) = values[0] != 0.0 ? 1u : 0u;
             }
         }
     }

@@ -77,6 +77,7 @@ fn read_config(meta: &Value) -> Config {
         fault_gyro_bias_sigma: num(c, "fault_gyro_bias_sigma"),
         fault_mag_bias_sigma: num(c, "fault_mag_bias_sigma"),
         fault_attitude_sigma: num(c, "fault_attitude_sigma"),
+        sigma_outage_accel: num(c, "sigma_outage_accel"),
         control_enabled: u8::from(c["control_enabled"].as_bool().unwrap()),
         bdot_gain: num(c, "bdot_gain"),
         kp: num(c, "kp"),
