@@ -20,14 +20,16 @@ text() { arm-none-eabi-size "$1" | awk 'NR == 2 { print $1 }'; }
 declare -A size
 for opt in "-O2" "-Os" "-O2 -flto" "-Os -flto"; do
     dir="$work/c${opt// /}"
-    OPT="$opt" STACK_LIMIT=16384 "$repo/adcs-c/tools/cross_build.sh" "$dir" >/dev/null 2>&1
+    OPT="$opt" STACK_LIMIT=16384 "$repo/adcs-c/tools/cross_build.sh" "$dir" >"$work/log" 2>&1 ||
+        { cat "$work/log" >&2; exit 1; }
     for t in "${targets[@]}"; do
         size["C $opt|$t"]=$(text "$dir/$t/bare_metal.elf")
     done
 done
 for level in 2 s z; do
     dir="$work/rust$level"
-    CARGO_PROFILE_FIRMWARE_OPT_LEVEL="$level" "$repo/adcs-rs/tools/cross_build.sh" "$dir" >/dev/null 2>&1
+    CARGO_PROFILE_FIRMWARE_OPT_LEVEL="$level" "$repo/adcs-rs/tools/cross_build.sh" "$dir" \
+        >"$work/log" 2>&1 || { cat "$work/log" >&2; exit 1; }
     for t in "${targets[@]}"; do
         size["Rust opt-level $level|$t"]=$(text "$dir/$t.elf")
         checks=$(arm-none-eabi-objdump -d "$dir/$t.elf" | grep -c "bl.*panic_bounds_check" || true)

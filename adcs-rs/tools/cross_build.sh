@@ -36,7 +36,9 @@ for entry in "${targets[@]}"; do
         --specs=nosys.specs -Wl,--gc-sections ${EXTRA_LDFLAGS:-} -lm -o "$elf"
     echo "== $name (Rust)"
     arm-none-eabi-size "$elf"
-    if arm-none-eabi-nm "$elf" | grep -qE ' (malloc|_malloc_r)$'; then
+    # (nm to a file first: with pipefail, `nm | grep -q` can report nm's SIGPIPE as "no match")
+    arm-none-eabi-nm "$elf" >"$elf.nm"
+    if grep -qE ' (malloc|_malloc_r)$' "$elf.nm"; then
         echo "error: malloc is linked in" >&2
         status=1
     fi

@@ -1,15 +1,22 @@
-//! Fuzzes `Adcs::step` (cargo fuzz run step), like `adcs-c/tests/fuzz_step.c`.
+//! Fuzzes the C interface of the Rust library (`adcs_init`, `adcs_step` from `adcs-ffi`,
+//! including its `unsafe` code), with the same input format as `adcs-c/tests/fuzz_step.c`.
 //!
 //! Starts from a realistic configuration and input (golden vector "nominal", step 0). Byte 0
-//! selects the variant (bit 0) and control (bit 1); then records of 9 bytes, one per step:
-//! an op byte whose value mod 20 picks an input field to overwrite with the next 8 bytes as
-//! a raw f64 (19 = no change), after which the ADCS steps once. Checks that every step
-//! succeeds, the mode and status are in range, the attitude is unit-norm or all NaN, and the
-//! dipole command is finite and within the coil limits.
+//! selects the variant (bit 0) and control (bit 1); byte 1 gives the number of configuration
+//! changes (mod 4), each 9 bytes: a field index and a raw f64 written into that configuration
+//! field before `adcs_init` (a rejected configuration must make `adcs_step` fail cleanly);
+//! then records of 9 bytes, one per step: an op byte whose value mod 20 picks an input field
+//! to overwrite with the next 8 bytes as a raw f64 (19 = no change), after which the ADCS
+//! steps once. Checks that every step succeeds, the mode and status are in range, the
+//! attitude is unit-norm or all NaN, and the dipole command is finite and within the coil
+//! limits.
 #![no_main]
 
-use adcs_core::Adcs;
-use adcs_core::abi::{Config, Input, MODE_SAFE, VARIANT_MEKF, VARIANT_THESIS};
+use adcs_core::Real;
+use adcs_core::abi::{
+    Config, Input, MODE_SAFE, Output, STATUS_NOT_INITIALISED, VARIANT_MEKF, VARIANT_THESIS,
+};
+use adcs_rs::{adcs_init, adcs_state_size, adcs_step};
 use libfuzzer_sys::fuzz_target;
 
 const BASE_INPUT: [f64; 19] = [
@@ -99,6 +106,51 @@ fn to_input(r: &[f64; 19]) -> Input {
     }
 }
 
+/// Configuration values the fuzzer may overwrite (every real field and array element).
+const CONFIG_SETTERS: [fn(&mut Config, Real); 41] = [
+    |c, v| c.dt = v,
+    |c, v| c.process_dt = v,
+    |c, v| c.inertia[0] = v,
+    |c, v| c.inertia[1] = v,
+    |c, v| c.inertia[4] = v,
+    |c, v| c.inertia[8] = v,
+    |c, v| c.max_dipole[0] = v,
+    |c, v| c.max_dipole[2] = v,
+    |c, v| c.flae_weight_sun = v,
+    |c, v| c.flae_weight_mag = v,
+    |c, v| c.flae_tolerance = v,
+    |c, v| c.ukf_alpha = v,
+    |c, v| c.p_x0[0] = v,
+    |c, v| c.p_x0[12] = v,
+    |c, v| c.p_b0[3] = v,
+    |c, v| c.w_x[0] = v,
+    |c, v| c.w_x[10] = v,
+    |c, v| c.w_b[0] = v,
+    |c, v| c.v[0] = v,
+    |c, v| c.v[7] = v,
+    |c, v| c.sigma_gyro_noise = v,
+    |c, v| c.sigma_gyro_bias_walk = v,
+    |c, v| c.sigma_mag_noise = v,
+    |c, v| c.sigma_mag_bias_walk = v,
+    |c, v| c.sigma_sun_noise = v,
+    |c, v| c.p0_attitude = v,
+    |c, v| c.p0_gyro_bias = v,
+    |c, v| c.p0_mag_bias = v,
+    |c, v| c.fault_nis_threshold = v,
+    |c, v| c.fault_gyro_bias_sigma = v,
+    |c, v| c.fault_mag_bias_sigma = v,
+    |c, v| c.fault_attitude_sigma = v,
+    |c, v| c.sigma_outage_accel = v,
+    |c, v| c.bdot_gain = v,
+    |c, v| c.kp = v,
+    |c, v| c.kd = v,
+    |c, v| c.q_target[0] = v,
+    |c, v| c.q_target[3] = v,
+    |c, v| c.detumble_enter_rate = v,
+    |c, v| c.detumble_exit_rate = v,
+    |c, v| c.settle_time = v,
+];
+
 fuzz_target!(|data: &[u8]| {
     let Some((&flags, rest)) = data.split_first() else {
         return;
@@ -108,18 +160,45 @@ fuzz_target!(|data: &[u8]| {
     } else {
         VARIANT_MEKF
     };
-    let cfg = config(variant, flags & 2 != 0);
-    let mut adcs = Box::new(Adcs::new());
-    adcs.init(&cfg).expect("base configuration is valid");
+    let mut cfg = config(variant, flags & 2 != 0);
+    let mut rest = rest;
+    if let Some((&n, tail)) = rest.split_first() {
+        rest = tail;
+        for _ in 0..n % 4 {
+            if rest.len() < 9 {
+                break;
+            }
+            let v = f64::from_le_bytes(rest[1..9].try_into().unwrap());
+            CONFIG_SETTERS[usize::from(rest[0]) % CONFIG_SETTERS.len()](&mut cfg, v as Real);
+            rest = &rest[9..];
+        }
+    }
+    // State memory as a C caller would provide it: 8-byte aligned, zeroed.
+    let mut mem = vec![0u64; adcs_state_size().div_ceil(8)];
+    let state = mem.as_mut_ptr().cast::<core::ffi::c_void>();
+    let mut out = Output::empty(0, 0);
+    // SAFETY: `mem` is adcs_state_size() bytes, 8-byte aligned and exclusively ours; `cfg`,
+    // the inputs and `out` are valid for the duration of each call.
+    if unsafe { adcs_init(state, &raw const cfg) } != 0 {
+        let input = Input::default();
+        let rc = unsafe { adcs_step(state, &raw const input, &raw mut out) };
+        assert!(
+            rc != 0 && out.status == STATUS_NOT_INITIALISED,
+            "rejected config stepped"
+        );
+        return;
+    }
     let mut fields = BASE_INPUT;
     for rec in rest.chunks_exact(9) {
         let op = usize::from(rec[0] % 20);
         if op < 19 {
             fields[op] = f64::from_le_bytes(rec[1..9].try_into().unwrap());
         }
-        let out = adcs.step(&to_input(&fields)).expect("initialised");
+        let input = to_input(&fields);
+        let rc = unsafe { adcs_step(state, &raw const input, &raw mut out) };
+        assert_eq!(rc, 0, "adcs_step failed on an initialised state");
         assert!(out.mode <= MODE_SAFE && out.status & !0xff == 0);
-        let n2: f64 = out.q_est.iter().map(|x| x * x).sum();
+        let n2: f64 = out.q_est.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
         assert!(out.q_est.iter().all(|x| x.is_nan()) || (n2 - 1.0).abs() < 1e-6);
         for (m, max) in out.m_cmd.iter().zip(cfg.max_dipole) {
             assert!(

@@ -1,0 +1,203 @@
+{
+ "format_version": 1,
+ "name": "implausible",
+ "description": "Nominal inputs with finite but implausible or non-unit values and a gyro outage.",
+ "steps": 400,
+ "dt": 0.1,
+ "inertia": [
+  0.04186666666666667,
+  0.0,
+  0.0,
+  0.0,
+  0.04186666666666667,
+  0.0,
+  0.0,
+  0.0,
+  0.006666666666666668
+ ],
+ "max_dipole": [
+  0.13,
+  0.13,
+  0.082
+ ],
+ "config": {
+  "variant": "mekf",
+  "flae_weight_sun": 1.0,
+  "flae_weight_mag": 1.0,
+  "flae_tolerance": 0.001,
+  "flae_max_iterations": 20,
+  "process_dt": 0.1,
+  "ukf_alpha": 1.0,
+  "p_x0": [
+   0.0001,
+   0.0001,
+   0.0001,
+   0.0001,
+   0.01,
+   0.01,
+   0.01,
+   1e-07,
+   1e-07,
+   1e-07,
+   5e-07,
+   5e-07,
+   5e-07
+  ],
+  "p_b0": [
+   1e-12,
+   1e-12,
+   1e-12,
+   1e-07,
+   1e-07,
+   1e-07
+  ],
+  "w_x": [
+   1e-08,
+   1e-08,
+   1e-08,
+   1e-08,
+   0.0001,
+   0.0001,
+   0.0001,
+   0.02,
+   0.02,
+   0.02,
+   1e-09,
+   1e-09,
+   1e-09
+  ],
+  "w_b": [
+   1e-11,
+   1e-11,
+   1e-11,
+   1e-06,
+   1e-06,
+   1e-06
+  ],
+  "v": [
+   0.0001,
+   0.0001,
+   0.0001,
+   0.0001,
+   0.01,
+   0.01,
+   0.01,
+   1.0,
+   1.0,
+   1.0,
+   5e-06,
+   5e-06,
+   5e-06
+  ],
+  "usque_lambda": 1.0,
+  "sigma_gyro_noise": 1e-05,
+  "sigma_gyro_bias_walk": 3e-06,
+  "sigma_mag_noise": 0.1,
+  "sigma_mag_bias_walk": 0.001,
+  "sigma_sun_noise": 0.0002,
+  "p0_attitude": 0.05,
+  "p0_gyro_bias": 0.005,
+  "p0_mag_bias": 2.0,
+  "fault_nis_threshold": 25.0,
+  "fault_steps": 3,
+  "fault_gyro_bias_sigma": 0.1,
+  "fault_mag_bias_sigma": 50.0,
+  "fault_attitude_sigma": 0.05,
+  "sigma_outage_accel": 0.001,
+  "control_enabled": false,
+  "bdot_gain": 40000.0,
+  "kp": 2e-05,
+  "kd": 0.002,
+  "q_target": [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ],
+  "detumble_enter_rate": 0.06981317007977318,
+  "detumble_exit_rate": 0.017453292519943295,
+  "settle_time": 60.0
+ },
+ "layout": {
+  "input": [
+   [
+    "t",
+    1
+   ],
+   [
+    "mag_b",
+    3
+   ],
+   [
+    "mag_valid",
+    1
+   ],
+   [
+    "gyro_b",
+    3
+   ],
+   [
+    "gyro_valid",
+    1
+   ],
+   [
+    "sun_b",
+    3
+   ],
+   [
+    "sun_valid",
+    1
+   ],
+   [
+    "sun_ref_i",
+    3
+   ],
+   [
+    "mag_ref_i",
+    3
+   ]
+  ],
+  "output": [
+   [
+    "q_est",
+    4
+   ],
+   [
+    "w_est",
+    3
+   ],
+   [
+    "bias_mag",
+    3
+   ],
+   [
+    "bias_gyro",
+    3
+   ],
+   [
+    "p_diag",
+    19
+   ],
+   [
+    "m_cmd",
+    3
+   ],
+   [
+    "mode",
+    1
+   ],
+   [
+    "status",
+    1
+   ]
+  ]
+ },
+ "tolerances": {
+  "q_est": 1e-09,
+  "w_est": 1e-09,
+  "bias_mag": 1e-13,
+  "bias_gyro": 1e-09,
+  "p_diag": 1e-09,
+  "m_cmd": 1e-09
+ }
+}

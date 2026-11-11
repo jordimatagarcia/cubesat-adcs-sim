@@ -2,6 +2,7 @@
 means the algorithm changed; if that was deliberate, regenerate with tools/make_golden.py
 (the C and Rust implementations are tested against the same files)."""
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,10 @@ NAMES = {
     "eclipse_start",
     "high_noise",
     "control",
+    "pointing",
+    "substeps",
+    "implausible",
+    "degenerate",
 }
 
 
@@ -32,16 +37,6 @@ def test_golden_set_is_complete(variant: str) -> None:
     assert names == NAMES
     for p in files:
         assert GoldenVector.read(p).config.variant == variant
-    assert names == {
-        "nominal",
-        "bad_input",
-        "gyro_bias",
-        "mag_bias",
-        "eclipse_entry",
-        "eclipse_start",
-        "high_noise",
-        "control",
-    }
     for p in files:
         size = p.with_suffix(".f64").stat().st_size
         assert size % (8 * (INPUT_SIZE + OUTPUT_SIZE)) == 0
@@ -73,6 +68,16 @@ def test_golden_vectors_cover_the_intended_paths(variant: str) -> None:
     entry = load("eclipse_entry")
     assert entry.inputs[0].sun_valid and not entry.inputs[-1].sun_valid
 
+    pointing = load("pointing")
+    assert any(o.mode == AdcsMode.POINT for o in pointing.outputs)
+    assert any(o.status & AdcsStatus.FLAE_FAILED for o in load("degenerate").outputs)
+    implausible = load("implausible")
+    assert any(o.status & AdcsStatus.BAD_INPUT for o in implausible.outputs)
+    if variant == "mekf":
+        assert any(o.status & AdcsStatus.RATE_PROPAGATED for o in implausible.outputs)
+    else:
+        assert load("substeps").config.process_dt < load("substeps").dt
+
     control = load("control")
     assert any(o.mode == AdcsMode.DETUMBLE for o in control.outputs)
     assert any(np.any(o.m_cmd != 0.0) for o in control.outputs)
@@ -86,3 +91,18 @@ def test_mekf_vectors_record_the_fault_detector() -> None:
     for name in ("gyro_bias", "mag_bias"):
         assert any(o.status & AdcsStatus.BIAS_FAULT for o in load(name).outputs), name
     assert not any(o.status & AdcsStatus.BIAS_FAULT for o in load("nominal").outputs)
+
+
+def test_compare_catches_differences_hidden_by_infinities_and_small_values() -> None:
+    """Was: equal infinities gave a NaN difference that hid every other difference in the
+    field, and the magnetometer-bias tolerance (1e-13 T) exceeded the recorded values."""
+    g = GoldenVector.read(GOLDEN[0])
+    out = g.outputs[-1]
+    p = out.p_diag.copy()
+    p[0], p[1] = np.inf, p[1] + 0.5
+    hidden = dataclasses.replace(out, p_diag=p)
+    assert compare(
+        dataclasses.replace(out, p_diag=np.where(np.arange(19) == 0, np.inf, out.p_diag)), hidden
+    )
+    small = dataclasses.replace(out, bias_mag=np.array([5e-14, 0.0, 0.0]))
+    assert compare(small, dataclasses.replace(small, bias_mag=np.zeros(3)))

@@ -182,7 +182,7 @@ Requirements: Python 3.12+ with [uv](https://docs.astral.sh/uv/), CMake 3.20+ an
 compiler, and a stable Rust toolchain.
 
 ```bash
-uv sync                      # create the virtual environment
+uv sync --extra viz          # create the virtual environment (the tests include the viewer)
 uv run pre-commit install    # enable the commit hooks
 uv run pytest                # Python tests
 

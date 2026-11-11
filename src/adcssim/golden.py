@@ -49,20 +49,24 @@ OUTPUT_LAYOUT: tuple[tuple[str, int], ...] = (
 INPUT_SIZE = sum(n for _, n in INPUT_LAYOUT)
 OUTPUT_SIZE = sum(n for _, n in OUTPUT_LAYOUT)
 
-TOLERANCES = {
-    "q_est": 1e-9,
-    "w_est": 1e-9,
-    "bias_mag": 1e-13,
-    "bias_gyro": 1e-9,
-    "p_diag": 1e-9,
-    "m_cmd": 1e-9,
+TOLERANCES: dict[str, tuple[float, float]] = {
+    # field: (absolute, relative); a value passes if |actual − expected| ≤ abs + rel·|expected|
+    "q_est": (1e-9, 0.0),
+    "w_est": (1e-9, 0.0),
+    "bias_mag": (1e-16, 1e-6),
+    "bias_gyro": (1e-9, 0.0),
+    "p_diag": (1e-18, 1e-6),
+    "m_cmd": (1e-9, 0.0),
 }
-"""Absolute tolerances for comparing an implementation against the recorded vectors (double
-precision): q dimensionless, rates in rad/s, the magnetometer bias in T (1e-13 T = 1e-7 µT).
-Loose enough for a different BLAS, CPU or order of operations, whose last-bit differences
-are amplified right after a bias fault inflates the covariance (seen at 2e-11 rad/s between
-two machines); tight enough to catch any algorithmic change, which shows up at 1e-6 or more.
-Mode and status must match exactly. NaN must match NaN."""
+"""Tolerances for comparing an implementation against the recorded vectors (double
+precision): q dimensionless, rates in rad/s, the magnetometer bias in T, p_diag in filter
+units. Loose enough for a different BLAS, CPU or order of operations, whose last-bit
+differences are amplified right after a bias fault inflates the covariance (seen at 2e-11
+rad/s between two machines); tight enough to catch any algorithmic change, which shows up at
+1e-6 or more. The magnetometer bias (often below 1e-13 T) and the variances (1e-12 to 1e12)
+need a relative part: an absolute tolerance alone was larger than many recorded values.
+Mode and status must match exactly; NaN must match NaN and infinities must be equal. The C
+(tests/golden_runner.c) and Rust (adcs-core/tests/golden.rs) checks use the same numbers."""
 
 
 @dataclass
@@ -172,16 +176,25 @@ class GoldenVector:
 def compare(expected: AdcsOutput, actual: AdcsOutput) -> list[str]:
     """Differences beyond tolerance, as human-readable strings (empty if they match)."""
     problems = []
-    for name, tol in TOLERANCES.items():
+    for name, (atol, rtol) in TOLERANCES.items():
         e = np.asarray(getattr(expected, name), dtype=np.float64)
         a = np.asarray(getattr(actual, name), dtype=np.float64)
         if not np.array_equal(np.isnan(e), np.isnan(a)):
             problems.append(f"{name}: NaN pattern differs ({e} vs {a})")
             continue
-        finite = ~np.isnan(e)
-        diff = float(np.max(np.abs(e[finite] - a[finite]), initial=0.0))
-        if diff > tol:
-            problems.append(f"{name}: max difference {diff:.3g} > {tol:g}")
+        same = (e == a) | (np.isnan(e) & np.isnan(a))  # also equal infinities
+        if not np.all(np.isfinite(e[~same]) & np.isfinite(a[~same])):
+            problems.append(f"{name}: infinite values differ ({e} vs {a})")
+            continue
+        with np.errstate(invalid="ignore"):  # inf − inf where both are equal: masked below
+            excess = np.abs(e - a) - (atol + rtol * np.abs(e))
+        excess = np.where(same, -1.0, excess)
+        if np.any(excess > 0.0):
+            i = int(np.argmax(excess))
+            problems.append(
+                f"{name}[{i}]: {a.flat[i]:.6g} vs {e.flat[i]:.6g} "
+                f"(tolerance {atol:g} + {rtol:g}·|x|)"
+            )
     if int(expected.mode) != int(actual.mode):
         problems.append(f"mode: {int(expected.mode)} vs {int(actual.mode)}")
     if int(expected.status) != int(actual.status):

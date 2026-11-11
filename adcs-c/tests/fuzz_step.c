@@ -3,10 +3,13 @@
  *
  * Starts from a realistic configuration and input (golden vector "nominal", step 0) and lets
  * the fuzzer change them. Input format: byte 0 selects the variant (bit 0) and control
- * (bit 1); then records of 9 bytes, one per step: an op byte whose value mod 20 picks an
- * input field to overwrite with the following 8 bytes as a raw double (19 = no change),
- * after which adcs_step runs once. Fields keep their values between steps, so the fuzzer can
- * build up sequences (valid start, then NaN, then huge values, ...).
+ * (bit 1); byte 1 gives the number of configuration changes (mod 4), each 9 bytes: a field
+ * index and a raw double written into that configuration field before adcs_init (a
+ * rejected configuration must make adcs_step fail cleanly); then records of 9 bytes, one per
+ * step: an op byte whose value mod 20 picks an input field to overwrite with the following
+ * 8 bytes as a raw double (19 = no change), after which adcs_step runs once. Fields keep
+ * their values between steps, so the fuzzer can build up sequences (valid start, then NaN,
+ * then huge values, ...).
  *
  * Besides the sanitizers, checks that every step succeeds, the mode and status are in range,
  * the attitude is either unit-norm or all NaN, and the dipole command is finite and within
@@ -102,6 +105,24 @@ static void to_input(const double r[19], adcs_input *in)
     in->sun_valid = r[12] != 0.0;
 }
 
+/* Configuration values the fuzzer may overwrite (every real field and array element). */
+#define REAL_AT(field) offsetof(adcs_config, field)
+static const size_t CONFIG_REALS[] = {
+    REAL_AT(dt), REAL_AT(process_dt), REAL_AT(inertia[0]), REAL_AT(inertia[1]),
+    REAL_AT(inertia[4]), REAL_AT(inertia[8]), REAL_AT(max_dipole[0]), REAL_AT(max_dipole[2]),
+    REAL_AT(flae_weight_sun), REAL_AT(flae_weight_mag), REAL_AT(flae_tolerance),
+    REAL_AT(ukf_alpha), REAL_AT(p_x0[0]), REAL_AT(p_x0[12]), REAL_AT(p_b0[3]), REAL_AT(w_x[0]),
+    REAL_AT(w_x[10]), REAL_AT(w_b[0]), REAL_AT(v[0]), REAL_AT(v[7]),
+    REAL_AT(sigma_gyro_noise), REAL_AT(sigma_gyro_bias_walk), REAL_AT(sigma_mag_noise),
+    REAL_AT(sigma_mag_bias_walk), REAL_AT(sigma_sun_noise), REAL_AT(p0_attitude),
+    REAL_AT(p0_gyro_bias), REAL_AT(p0_mag_bias), REAL_AT(fault_nis_threshold),
+    REAL_AT(fault_gyro_bias_sigma), REAL_AT(fault_mag_bias_sigma), REAL_AT(fault_attitude_sigma),
+    REAL_AT(sigma_outage_accel), REAL_AT(bdot_gain), REAL_AT(kp), REAL_AT(kd),
+    REAL_AT(q_target[0]), REAL_AT(q_target[3]), REAL_AT(detumble_enter_rate),
+    REAL_AT(detumble_exit_rate), REAL_AT(settle_time),
+};
+#define N_CONFIG_REALS (sizeof CONFIG_REALS / sizeof CONFIG_REALS[0])
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -114,13 +135,32 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         return 0;
     }
     adcs_state *state = (adcs_state *)mem;
-    const adcs_config cfg = base_config(data[0] & 1u, (data[0] & 2u) != 0);
+    adcs_config cfg = base_config(data[0] & 1u, (data[0] & 2u) != 0);
+    size_t pos0 = 1;
+    if (size > 1) {
+        const size_t changes = data[1] % 4u;
+        pos0 = 2;
+        for (size_t c = 0; c < changes && pos0 + 9 <= size; c++, pos0 += 9) {
+            double v;
+            memcpy(&v, &data[pos0 + 1], sizeof v);
+            const size_t off = CONFIG_REALS[data[pos0] % N_CONFIG_REALS];
+            const adcs_real value = (adcs_real)v;
+            memcpy((unsigned char *)&cfg + off, &value, sizeof value);
+        }
+    }
     if (adcs_init(state, &cfg) != 0) {
-        abort();
+        /* rejected: stepping must fail cleanly, reporting it */
+        adcs_input in;
+        adcs_output out;
+        memset(&in, 0, sizeof in);
+        if (adcs_step(state, &in, &out) == 0 || out.status != ADCS_STATUS_NOT_INITIALISED) {
+            abort();
+        }
+        return 0;
     }
     double fields[19];
     memcpy(fields, BASE_INPUT, sizeof fields);
-    for (size_t pos = 1; pos + 9 <= size; pos += 9) {
+    for (size_t pos = pos0; pos + 9 <= size; pos += 9) {
         const unsigned op = data[pos] % 20u;
         if (op < 19) {
             memcpy(&fields[op], &data[pos + 1], sizeof(double));

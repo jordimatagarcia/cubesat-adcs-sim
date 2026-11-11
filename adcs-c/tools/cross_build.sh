@@ -36,7 +36,9 @@ for entry in "${targets[@]}"; do
     arm-none-eabi-size "$dir/bare_metal.elf"
     echo "largest stack frames:"
     sort -t$'\t' -k2 -n "$dir"/*.su | tail -4 | sed 's/^/  /'
-    if arm-none-eabi-nm "$dir/bare_metal.elf" | grep -qE ' (malloc|_malloc_r)$'; then
+    # (nm to a file first: with pipefail, `nm | grep -q` can report nm's SIGPIPE as "no match")
+    arm-none-eabi-nm "$dir/bare_metal.elf" >"$dir/bare_metal.elf.nm"
+    if grep -qE ' (malloc|_malloc_r)$' "$dir/bare_metal.elf.nm"; then
         echo "error: malloc is linked in" >&2
         status=1
     fi

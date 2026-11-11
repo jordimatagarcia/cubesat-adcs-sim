@@ -374,11 +374,11 @@ Verification:
 
 | Check | How |
 |---|---|
-| Matches the reference | All 16 golden vectors, by a C runner (`tests/golden_runner.c`, under ctest) and through the simulator's ctypes backend. Largest difference: 3·10⁻¹¹ (rad/s, MEKF gyro-bias case right after a fault inflates the covariance), elsewhere ~10⁻¹⁴. Tolerance 10⁻⁹. |
+| Matches the reference | All 24 golden vectors (12 per variant, including pointing, sub-stepping, implausible and degenerate inputs), by a C runner (`tests/golden_runner.c`, under ctest; tolerances absolute plus relative, as in `golden.py`; in the float build the attitude within 0.1°) and through the simulator's ctypes backend. Largest difference: 3·10⁻¹¹ (rad/s, MEKF gyro-bias case right after a fault inflates the covariance), elsewhere ~10⁻¹⁴. Tolerance 10⁻⁹. |
 | Closed loop | The same 60 s scenarios (B-dot detumbling, magnetometer-bias case, realistic sensors) with the Python and C backends give identical attitude, rate, commands, modes and status to 10⁻⁸ (`tests/test_native.py`). |
 | Full scenarios | `tools/crosscheck.py` runs all 10 scenarios to the end with both variants, Python and C (rerun after the review fixes). 18 of 20 runs agree to 2·10⁻¹¹ or better over up to 114 000 closed-loop steps. Two detumble runs drift: with the thesis variant the filter repeatedly loses lock while its estimate drives the coils (errors up to 180°); with the MEKF, rate-based B-dot now finishes detumbling early and the run spends hours in POINT, where the untuned pointing loop amplifies rounding by about 10× per 1000 s (10⁻¹⁴ at 1800 s, 10⁻⁶ at 11 000 s). Both grow smoothly with no discrete event first, so they are sensitivity of the closed loop, not porting errors; C and Rust stay bit-identical in the thesis detumble run. |
 | Memory and undefined behaviour | Unit and golden tests under AddressSanitizer and UndefinedBehaviorSanitizer, with GCC and Clang. |
-| Robustness | libFuzzer harness (`tests/fuzz_step.c`): arbitrary input sequences must never crash, the attitude must be unit-norm or NaN, and the dipole command finite and within the coil limits. 2 minutes per CI run. |
+| Robustness | libFuzzer harness (`tests/fuzz_step.c`): arbitrary input sequences, and up to three arbitrary configuration values, must never crash (a rejected configuration must make `adcs_step` fail cleanly), the attitude must be unit-norm or NaN, and the dipole command finite and within the coil limits. 2 minutes per CI run. |
 | Static analysis | cppcheck (warning, style, performance, portability) for both precisions. |
 | Bare metal | `tools/cross_build.sh` builds `examples/bare_metal.c` for a Cortex-M4F (float) and a Cortex-M7 (double) with newlib's `nosys` stubs: about 24 KB of code for either target at `-O2`, no `malloc`. |
 
@@ -421,12 +421,12 @@ Verification:
 
 | Check | How |
 |---|---|
-| Matches the reference | All 16 golden vectors, by a Rust test (`adcs-core/tests/golden.rs`) and through the simulator's ctypes backend. The differences from the Python reference are the C library's, to the digit, in all but one vector (high noise, where they are smaller). |
+| Matches the reference | All 24 golden vectors, by a Rust test (`adcs-core/tests/golden.rs`; with the `f32` feature, the attitude within 0.1°) and through the simulator's ctypes backend. The differences from the Python reference are the C library's, to the digit, in all but one vector (high noise, where they are smaller). |
 | Closed loop | The 60 s closed-loop scenarios in `tests/test_native.py` run against both libraries and match the Python reference to 10⁻⁸. |
 | Full scenarios | `tools/crosscheck.py` (all 10 scenarios, both variants, to the end): Rust differs from the Python reference as much as C does. Rust and C are bit-identical in 7 of the 10 thesis-variant runs, including the chaotic thesis detumble run (114 000 steps), so its drift from the Python reference comes from NumPy's rounding. Elsewhere Rust and C differ by at most 3·10⁻¹², except MEKF detumble (10⁻³, the POINT-mode sensitivity above, seeded by `libm` vs the system maths library in sine and cosine). |
 | Interface | A test compiles a C program against `adcs.h` and checks every struct size and field offset against the Rust structs, in both precisions. |
 | Undefined behaviour | Miri runs the unit tests, including the FFI crate's misuse tests (null and misaligned pointers, a zeroed never-initialised state, non-0/1 flag bytes); it does not exercise arbitrary garbage state. |
-| Robustness | The same libFuzzer harness as the C library (`fuzz/fuzz_targets/step.rs`), built with the stable toolchain and run with debug assertions and overflow checks, 2 minutes per CI run (`tools/fuzz.sh`). |
+| Robustness | The same libFuzzer harness as the C library (`fuzz/fuzz_targets/step.rs`), through the C interface (`adcs_init`/`adcs_step`, so the `unsafe` FFI code is fuzzed too), built with the stable toolchain and run with debug assertions and overflow checks, 2 minutes per CI run (`tools/fuzz.sh`). |
 | Lints | `clippy::pedantic` with warnings as errors, both precisions. |
 | Bare metal | `tools/cross_build.sh` builds the `no_std` static library for a Cortex-M4F (float) and a Cortex-M7 (double) and links the C example `examples/bare_metal.c` against it, unchanged. No `malloc`. The Cortex-M builds can only be linked; `tools/host_example.sh` builds the same example for the host against the Rust library and runs it, in both precisions (the state fits the 48 KB buffer and the ADCS runs). |
 
@@ -443,3 +443,12 @@ uv run adcssim run scenarios/case_1a.toml --backend rust
 
 The backend loads `adcs-rs/target/release/libadcs_rs.so`, or the library named in
 `ADCSSIM_RUST_LIB`.
+
+## Repository checks
+
+- Every commit's author and committer email must be an allowed personal identity
+  (`tools/allowed_identities.txt`): checked before each commit (`tools/check_identity.sh`),
+  before each push (`tools/check_history.sh`, a pre-push hook) and on the whole history in CI
+  (`.github/workflows/repo.yml`), so a commit made elsewhere cannot land unnoticed.
+- Staged files must not contain words from the local, untracked list in
+  `.git/info/blocked-words` (`tools/check_private_words.sh`).

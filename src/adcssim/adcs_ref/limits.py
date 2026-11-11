@@ -23,7 +23,8 @@ def _norm_if_finite(v: NDArray[np.float64]) -> float | None:
     a = np.asarray(v, dtype=np.float64)
     if not np.all(np.isfinite(a)):
         return None
-    return float(np.linalg.norm(a))
+    with np.errstate(over="ignore"):  # an absurd value overflows to inf: rejected anyway
+        return float(np.linalg.norm(a))
 
 
 def gyro_plausible(v: NDArray[np.float64]) -> bool:

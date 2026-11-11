@@ -78,7 +78,11 @@ for name in "${configs[@]}"; do
     prec=double
     [[ "$name" == *-f32 ]] && prec=float
     lto=""
-    [[ "$name" == *-lto* ]] && lto="-flto -O3"
+    # link an LTO build at its own level (LTO optimises again at link time)
+    if [[ "$name" == *-lto* ]]; then
+        lto="-flto -O3"
+        [[ "$name" == *-O2-* ]] && lto="-flto -O2"
+    fi
     # shellcheck disable=SC2086
     "$(cat "$work/$name/linker")" $lto "$work/bench-$prec.o" "$work/golden_io-$prec.o" \
         "$work/$name/lib.a" -lm -lpthread -o "$work/$name/bench"

@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 adcs-core = { path = "../adcs-core" }
+adcs-ffi = { path = "../adcs-ffi" }
 
 [[bin]]
 name = "step"

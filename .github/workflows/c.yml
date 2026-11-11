@@ -21,16 +21,16 @@ jobs:
       CC: ${{ matrix.compiler }}
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build
       - run: >
-          cmake -S adcs-c -B build -G Ninja
+          cmake -S adcs-c -B build
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DADCS_SANITIZE=${{ matrix.sanitize }}
-      - run: cmake --build build
+      - run: cmake --build build --parallel
       - run: ctest --test-dir build --output-on-failure
 
   float:
-    # Single-precision build: -Wdouble-promotion catches accidental double arithmetic.
+    # Single-precision build: -Wdouble-promotion catches accidental double arithmetic; the
+    # unit tests, the golden vectors (attitude within 0.1°) and the bare-metal example run.
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -39,15 +39,16 @@ jobs:
       CC: ${{ matrix.compiler }}
     steps:
       - uses: actions/checkout@v5
-      - run: cmake -S adcs-c -B build -DADCS_USE_FLOAT=ON -DADCS_BUILD_TESTS=OFF
-      - run: cmake --build build
+      - run: cmake -S adcs-c -B build -DADCS_USE_FLOAT=ON
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure
 
   cortex-m:
     # Bare-metal cross builds (Cortex-M4F float, Cortex-M7 double): no heap, bounded stack.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
       - run: adcs-c/tools/cross_build.sh
 
   fuzz:
@@ -72,7 +73,7 @@ jobs:
         precision: ["-UADCS_USE_FLOAT", "-DADCS_USE_FLOAT"]
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y cppcheck
       - run: >
           cppcheck --std=c11 ${{ matrix.precision }}
           --enable=warning,style,performance,portability

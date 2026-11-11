@@ -14,7 +14,16 @@
 #include "quat.h"
 #include "tsukf.h"
 
+/* Tolerances for both precisions (the tests also run in the float build). */
+#ifdef ADCS_USE_FLOAT
+#define TOL 2e-4
+#define TOL9 2e-4
+#define NEWTON_TOL ((adcs_real)1e-5)
+#else
 #define TOL 1e-12
+#define TOL9 1e-9
+#define NEWTON_TOL ((adcs_real)1e-10)
+#endif
 
 static void test_abi_version(void)
 {
@@ -78,7 +87,7 @@ static void test_solve_inverse_det(void)
     la_mul(5, 5, 5, p, inv, prod);
     for (size_t i = 0; i < 5; i++) {
         for (size_t j = 0; j < 5; j++) {
-            CHECK_NEAR(LA_AT(prod, 5, i, j), i == j ? 1 : 0, 1e-12);
+            CHECK_NEAR(LA_AT(prod, 5, i, j), i == j ? 1 : 0, TOL);
         }
     }
     /* right division: x·p = b */
@@ -86,10 +95,10 @@ static void test_solve_inverse_det(void)
     CHECK(la_right_divide(2, 5, b, p, x, work) == 0);
     la_mul(2, 5, 5, x, p, prod);
     for (int i = 0; i < 10; i++) {
-        CHECK_NEAR(prod[i], b[i], 1e-12);
+        CHECK_NEAR(prod[i], b[i], TOL);
     }
     const adcs_real m3[9] = {2, -1, 0, 1, 3, 4, 0, 5, -2};
-    CHECK_NEAR(la_det(3, m3, work), -54, 1e-12);
+    CHECK_NEAR(la_det(3, m3, work), -54, TOL);
     const adcs_real singular[9] = {1, 2, 3, 2, 4, 6, 1, 0, 1};
     CHECK(la_det(3, singular, work) == 0);
     CHECK(la_inverse(3, singular, inv, work) != 0);
@@ -115,7 +124,7 @@ static void test_quaternions(void)
     quat_to_dcm(qp, aqp);
     la_mul(3, 3, 3, aq, ap, prod);
     for (int i = 0; i < 9; i++) {
-        CHECK_NEAR(aqp[i], prod[i], 1e-12);
+        CHECK_NEAR(aqp[i], prod[i], TOL);
     }
     /* rate quaternion: 90°/s about z for 1 s */
     const adcs_real w[3] = {0, 0, (adcs_real)(3.14159265358979323846 / 2)};
@@ -143,15 +152,15 @@ static void test_flae_recovers_attitude(void)
     quat_rotate(q, &ref[3], &body[3]);
     const adcs_real weights[2] = {1, 1};
     flae_result res;
-    CHECK(flae2(body, ref, weights, NULL, 1e-10, 20, &res) == 0);
+    CHECK(flae2(body, ref, weights, NULL, NEWTON_TOL, 20, &res) == 0);
     for (int i = 0; i < 4; i++) {
-        CHECK_NEAR(res.q[i], q[i], 1e-9);
+        CHECK_NEAR(res.q[i], q[i], TOL9);
     }
-    CHECK_NEAR(res.lambda_max, 1, 1e-9);
+    CHECK_NEAR(res.lambda_max, 1, TOL9);
     /* sign follows q_prev */
     const adcs_real prev[4] = {-q[0], -q[1], -q[2], -q[3]};
-    CHECK(flae2(body, ref, weights, prev, 1e-10, 20, &res) == 0);
-    CHECK_NEAR(res.q[3], -q[3], 1e-9);
+    CHECK(flae2(body, ref, weights, prev, NEWTON_TOL, 20, &res) == 0);
+    CHECK_NEAR(res.q[3], -q[3], TOL9);
 }
 
 static void test_flae_scalar_part_near_zero(void)
@@ -164,9 +173,9 @@ static void test_flae_scalar_part_near_zero(void)
     quat_rotate(q, &ref[3], &body[3]);
     const adcs_real weights[2] = {1, 1};
     flae_result res;
-    CHECK(flae2(body, ref, weights, NULL, 1e-10, 20, &res) == 0);
+    CHECK(flae2(body, ref, weights, NULL, NEWTON_TOL, 20, &res) == 0);
     const adcs_real d = fabs(res.q[0] * q[0] + res.q[1] * q[1] + res.q[2] * q[2] + res.q[3] * q[3]);
-    CHECK_NEAR(d, 1, 1e-9);
+    CHECK_NEAR(d, 1, TOL9);
 }
 
 static void test_flae_rejects_degenerate_input(void)
@@ -175,10 +184,10 @@ static void test_flae_rejects_degenerate_input(void)
     const adcs_real weights[2] = {1, 1};
     const adcs_real zero_weights[2] = {0, 0};
     flae_result res;
-    CHECK(flae2(ref, ref, weights, NULL, 1e-10, 20, &res) != 0);
+    CHECK(flae2(ref, ref, weights, NULL, NEWTON_TOL, 20, &res) != 0);
     const adcs_real ok[6] = {1, 0, 0, 0, 1, 0};
-    CHECK(flae2(ok, ok, zero_weights, NULL, 1e-10, 20, &res) != 0);
-    CHECK(flae2(ok, ok, weights, NULL, 1e-10, 0, &res) != 0); /* no iterations allowed */
+    CHECK(flae2(ok, ok, zero_weights, NULL, NEWTON_TOL, 20, &res) != 0);
+    CHECK(flae2(ok, ok, weights, NULL, NEWTON_TOL, 0, &res) != 0); /* no iterations allowed */
 }
 
 static void test_control_laws(void)
@@ -196,7 +205,7 @@ static void test_control_laws(void)
     control_torque_to_dipole(t_perp, b, m);
     v3_cross(m, b, produced);
     for (int i = 0; i < 3; i++) {
-        CHECK_NEAR(produced[i], t_perp[i], 1e-18);
+        CHECK_NEAR(produced[i], t_perp[i], TOL * 1e-6);
     }
     const adcs_real max_dipole[3] = {0.1, 0.1, 0.05};
     adcs_real big[3] = {0.2, 0.05, 0.05};
@@ -296,10 +305,10 @@ static void test_flae_long_vectors(void)
             longer[3 + i] = body[3 + i];
         }
         flae_result res;
-        CHECK(flae2(longer, ref, (const adcs_real[2]){1, 1}, NULL, 1e-12, 50, &res) == 0);
+        CHECK(flae2(longer, ref, (const adcs_real[2]){1, 1}, NULL, NEWTON_TOL, 50, &res) == 0);
         const adcs_real d =
             res.q[0] * q[0] + res.q[1] * q[1] + res.q[2] * q[2] + res.q[3] * q[3];
-        CHECK_NEAR(fabs(d), 1, 1e-9);
+        CHECK_NEAR(fabs(d), 1, TOL9);
     }
 }
 
