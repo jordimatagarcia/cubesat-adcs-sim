@@ -36,7 +36,7 @@ c_lib() { # name compiler flags...   (an -flto build is archived with the matchi
 rust_lib() { # name opt-level [features]
     local name="$1" opt="$2" features="${3:-}"
     # shellcheck disable=SC2086
-    CARGO_PROFILE_RELEASE_OPT_LEVEL="$opt" cargo build --quiet --release \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="$opt" cargo rustc --quiet --lib --crate-type staticlib --release \
         --manifest-path "$repo/adcs-rs/Cargo.toml" -p adcs-ffi --no-default-features $features \
         --target-dir "$work/target-$name" 2> >(grep -v "dropping unsupported crate type" >&2)
     mkdir -p "$work/$name"

@@ -24,7 +24,7 @@ for entry in "${targets[@]}"; do
     IFS='|' read -r name cpu features cflags <<<"$entry"
     target_dir="$out/cargo-$name"
     # shellcheck disable=SC2086
-    RUSTFLAGS="-C target-cpu=$cpu" cargo build --quiet --manifest-path "$here/Cargo.toml" \
+    RUSTFLAGS="-C target-cpu=$cpu" cargo rustc --quiet --lib --crate-type staticlib --manifest-path "$here/Cargo.toml" \
         -p adcs-ffi --profile firmware --target thumbv7em-none-eabihf --no-default-features $features \
         --target-dir "$target_dir"
     lib="$target_dir/thumbv7em-none-eabihf/firmware/libadcs_rs.a"

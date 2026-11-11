@@ -6,6 +6,9 @@
 #
 #   adcs-rs/tools/host_example.sh
 set -euo pipefail
+# (`cargo rustc --crate-type staticlib` builds only the static library: with the crate's other
+# types, rlib included, Cargo skips LTO, which leaves an unresolved unwinding symbol in a
+# no_std static library.)
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
@@ -21,7 +24,7 @@ for precision in double float; do
         flags="-DADCS_USE_FLOAT"
     fi
     # shellcheck disable=SC2086
-    cargo build --quiet --release --manifest-path "$here/Cargo.toml" -p adcs-ffi \
+    cargo rustc --quiet --lib --crate-type staticlib --release --manifest-path "$here/Cargo.toml" -p adcs-ffi \
         --no-default-features $features --target-dir "$work/target-$precision" \
         2> >(grep -v "dropping unsupported crate type" >&2 || true)
     # shellcheck disable=SC2086
