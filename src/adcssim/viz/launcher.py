@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from adcssim.backends.abi import VARIANT_IDS
 from adcssim.backends.config import VARIANTS
 from adcssim.launch import (
     RUNS_DIR,
@@ -186,7 +187,7 @@ class LauncherWindow(QMainWindow):
             self.backend_group.addButton(button)
             self.backend_buttons[status.name] = button
             row.addWidget(button)
-        self.backend_group.buttonToggled.connect(lambda *_: self._update_command())
+        self.backend_group.buttonToggled.connect(lambda *_: self._backend_changed())
         recheck = QPushButton("Re-check")
         recheck.setToolTip("Check again whether the C and Rust libraries are built")
         recheck.clicked.connect(self._refresh_backends)
@@ -204,6 +205,7 @@ class LauncherWindow(QMainWindow):
             self.variant_box.addItem(VARIANT_LABELS[v], v)
         self.variant_box.currentIndexChanged.connect(lambda _: self._variant_changed())
         form.addRow("Algorithm", self.variant_box)
+        self._sync_variants()
         return box
 
     def _build_options(self) -> QGroupBox:
@@ -392,6 +394,33 @@ class LauncherWindow(QMainWindow):
         self._reset_settings()
         for button in (self.live_button, self.batch_button):
             button.setEnabled(self.scenario is not None)
+
+    def _backend_changed(self) -> None:
+        self._sync_variants()
+        self._update_command()
+
+    def _sync_variants(self) -> None:
+        """Grey out the algorithms the selected implementation lacks: the C and Rust
+        libraries implement the thesis variant and the MEKF, not the UKF ("improved"). If an
+        unavailable one is selected, switch to the MEKF (same model, same settings)."""
+        if not hasattr(self, "variant_box"):
+            return
+        backend = self.selected_backend()
+        model = self.variant_box.model()
+        assert isinstance(model, QStandardItemModel)
+        for i in range(self.variant_box.count()):
+            variant = str(self.variant_box.itemData(i))
+            available = backend not in ("c", "rust") or variant in VARIANT_IDS
+            item = model.item(i)
+            item.setEnabled(available)
+            item.setToolTip(
+                ""
+                if available
+                else "Only in the Python reference: the C and Rust libraries "
+                "implement the thesis variant and the MEKF"
+            )
+        if self.selected_variant() not in VARIANT_IDS and backend in ("c", "rust"):
+            self.variant_box.setCurrentIndex(self.variant_box.findData("mekf"))
 
     def _variant_changed(self) -> None:
         if not self._ready:

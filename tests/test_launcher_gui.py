@@ -147,3 +147,24 @@ def test_choices_are_remembered(
     assert second.selected_path() == REPO / "scenarios" / "case_2a.toml"
     assert second.selected_variant() == "improved"
     assert second.paused_check.isChecked()
+
+
+def test_improved_is_greyed_out_for_the_compiled_libraries(window: LauncherWindow) -> None:
+    """The C and Rust libraries implement the thesis variant and the MEKF only."""
+    box = window.variant_box
+    model = box.model()
+
+    def enabled(variant: str) -> bool:
+        return bool(model.item(box.findData(variant)).isEnabled())  # type: ignore[attr-defined]
+
+    window.backend_buttons["python-ref"].setChecked(True)
+    box.setCurrentIndex(box.findData("improved"))
+    assert enabled("improved")
+    compiled = [b for b in ("c", "rust") if window.backend_buttons[b].isEnabled()]
+    if not compiled:
+        pytest.skip("neither compiled library is built")
+    window.backend_buttons[compiled[0]].setChecked(True)
+    assert not enabled("improved") and enabled("thesis") and enabled("mekf")
+    assert window.selected_variant() == "mekf"  # switched away from the unavailable one
+    window.backend_buttons["python-ref"].setChecked(True)
+    assert enabled("improved")
