@@ -12,6 +12,7 @@
 #include "flae.h"
 #include "linalg.h"
 #include "quat.h"
+#include "tsukf.h"
 
 #define TOL 1e-12
 
@@ -360,6 +361,127 @@ static void test_api_misuse(void)
     free(mem);
 }
 
+/* ---- TSUKF recovery after a failed Cholesky (same tests as tsukf.rs) ------------------ */
+
+#ifdef ADCS_USE_FLOAT
+#define TS_TOL 2e-4
+#else
+#define TS_TOL 1e-12
+#endif
+
+static void ts_identity(adcs_real x[TS_NX], const void *ctx)
+{
+    (void)x;
+    (void)ctx;
+}
+
+static void ts_fill(adcs_real *v, size_t n, adcs_real value)
+{
+    for (size_t i = 0; i < n; i++) {
+        v[i] = value;
+    }
+}
+
+static void ts_y(adcs_real y[TS_NY])
+{
+    static const adcs_real mag[3] = {(adcs_real)0.3, (adcs_real)-0.2, (adcs_real)0.1};
+    static const adcs_real gyro[3] = {(adcs_real)0.02, (adcs_real)-0.01, (adcs_real)0.015};
+    ts_fill(y, TS_NY, 0);
+    y[3] = 1;
+    y[TS_SUN + 2] = 1;
+    for (size_t i = 0; i < 3; i++) {
+        y[TS_MAG + i] = mag[i];
+        y[TS_W + i] = gyro[i];
+    }
+}
+
+static adcs_real ts_wx[TS_NX], ts_wb[TS_NB], ts_v[TS_NY], ts_px0[TS_NX], ts_pb0[TS_NB];
+static bool ts_all[TS_NY];
+static tsukf ts_a, ts_b; /* ~25 KB each: static, not on the stack */
+
+/* A filter after a few steps, so that β and Pᵇ are no longer their initial values. */
+static void ts_warmed(tsukf *f)
+{
+    adcs_real x0[TS_NX], b0[TS_NB], y[TS_NY];
+    ts_fill(ts_wx, TS_NX, (adcs_real)1e-6);
+    ts_fill(ts_wb, TS_NB, (adcs_real)1e-6);
+    ts_fill(ts_v, TS_NY, (adcs_real)1e-3);
+    ts_fill(ts_px0, TS_NX, (adcs_real)1e-2);
+    ts_fill(ts_pb0, TS_NB, (adcs_real)1e-2);
+    for (size_t i = 0; i < TS_NY; i++) {
+        ts_all[i] = true;
+    }
+    ts_fill(x0, TS_NX, 0);
+    x0[3] = 1;
+    x0[TS_SUN + 2] = 1;
+    ts_fill(b0, TS_NB, 0);
+    ts_y(y);
+    tsukf_configure(f, 1, ts_wx, ts_wb, ts_v);
+    tsukf_reset(f, x0, ts_px0, b0, ts_pb0);
+    for (int k = 0; k < 5; k++) {
+        CHECK(tsukf_step(f, ts_identity, NULL, y, ts_all));
+    }
+    bool coupled = false;
+    for (size_t i = 0; i < TS_NX * TS_NB; i++) {
+        coupled = coupled || f->beta[i] != 0;
+    }
+    CHECK(coupled);
+}
+
+static void ts_check_same(const tsukf *a, const tsukf *b)
+{
+    for (size_t i = 0; i < TS_NX; i++) {
+        CHECK_NEAR(a->x[i], b->x[i], TS_TOL);
+    }
+    for (size_t i = 0; i < TS_NX * TS_NX; i++) {
+        CHECK_NEAR(a->px[i], b->px[i], TS_TOL);
+    }
+    for (size_t i = 0; i < TS_NB; i++) {
+        CHECK_NEAR(a->b[i], b->b[i], TS_TOL);
+    }
+    for (size_t i = 0; i < TS_NB * TS_NB; i++) {
+        CHECK_NEAR(a->pb[i], b->pb[i], TS_TOL);
+    }
+}
+
+/* A failed prediction factorisation restarts Pˣ, Pᵇ and β together: the step equals one
+ * from a filter freshly reset to P₀ with the same estimate. */
+static void test_tsukf_failed_prediction_cholesky(void)
+{
+    adcs_real y[TS_NY];
+    ts_y(y);
+    ts_warmed(&ts_a);
+    ts_b = ts_a;
+    tsukf_reset(&ts_b, ts_a.x, ts_px0, ts_a.b, ts_pb0);
+    ts_a.px[0] = -1;
+    CHECK(!tsukf_step(&ts_a, ts_identity, NULL, y, ts_all));
+    CHECK(tsukf_step(&ts_b, ts_identity, NULL, y, ts_all));
+    ts_check_same(&ts_a, &ts_b);
+}
+
+/* A failed measurement factorisation resets the predicted Pˣ and drops the predicted β,
+ * keeping Pᵇ: the step equals one from a filter with Pˣ = P₀ˣ, β = 0, the same Pᵇ and no
+ * process noise on x (an identity process then predicts exactly that). */
+static void test_tsukf_failed_measurement_cholesky(void)
+{
+    adcs_real y[TS_NY], zero[TS_NX];
+    ts_y(y);
+    ts_fill(zero, TS_NX, 0);
+    ts_warmed(&ts_a);
+    ts_b = ts_a;
+    la_zero(TS_NX * TS_NX, ts_b.px);
+    for (size_t i = 0; i < TS_NX; i++) {
+        LA_AT(ts_b.px, TS_NX, i, i) = ts_px0[i];
+    }
+    la_zero(TS_NX * TS_NB, ts_b.beta);
+    tsukf_configure(&ts_b, 1, zero, ts_wb, ts_v);
+    ts_wx[0] = -1; /* makes the predicted Pˣ indefinite */
+    tsukf_configure(&ts_a, 1, ts_wx, ts_wb, ts_v);
+    CHECK(!tsukf_step(&ts_a, ts_identity, NULL, y, ts_all));
+    CHECK(tsukf_step(&ts_b, ts_identity, NULL, y, ts_all));
+    ts_check_same(&ts_a, &ts_b);
+}
+
 int main(void)
 {
     RUN(test_abi_version);
@@ -375,5 +497,7 @@ int main(void)
     RUN(test_config_rules);
     RUN(test_flae_long_vectors);
     RUN(test_abi_precision);
+    RUN(test_tsukf_failed_prediction_cholesky);
+    RUN(test_tsukf_failed_measurement_cholesky);
     return check_summary();
 }

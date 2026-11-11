@@ -165,7 +165,10 @@ class TwoStageUkf:
         # ---- prediction -------------------------------------------------------------
         lower = robust_cholesky(s.px)
         if lower is None:
-            s.px, ok = self._initial[0].copy(), False
+            # Restart Px, Pb and β together: a reset Px with the old β and Pb can leave the
+            # bias-free covariance Px − β Pb βᵀ indefinite.
+            s.px, s.pb = self._initial[0].copy(), self._initial[1].copy()
+            s.beta, ok = np.zeros_like(s.beta), False
             lower = np.linalg.cholesky(s.px)
         chi = self._sigma_points(s.x, lower)
         fx = f(chi)
@@ -189,7 +192,10 @@ class TwoStageUkf:
         px_pred = _sym(px_pred)
         lower2 = robust_cholesky(px_pred)
         if lower2 is None:
+            # Reset the predicted Px and drop the predicted coupling, so that the bias-free
+            # covariance Px − β Pb βᵀ is P0x (positive definite); Pb is kept.
             px_pred, ok = self._initial[0].copy(), False
+            beta_pred = np.zeros_like(beta_pred)
             lower2 = np.linalg.cholesky(px_pred)
         chi2 = self._sigma_points(x_pred, lower2)
         hx = h_fn(chi2)

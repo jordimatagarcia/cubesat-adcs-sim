@@ -202,8 +202,9 @@ bool tsukf_step(tsukf *f, tsukf_process_fn process, const void *ctx, const adcs_
 
     /* ---- prediction ------------------------------------------------------------------- */
     if (robust_cholesky(f->px, w->lower, w->a) != 0) {
-        diag_matrix(NX, f->px0, f->px);
-        ok = false;
+        /* Restart Pˣ, Pᵇ and β together: a reset Pˣ with the old β and Pᵇ can leave the
+         * bias-free covariance Pˣ − βPᵇβᵀ indefinite. */
+        ok = reset_covariance(f);
         (void)la_cholesky(NX, f->px, w->lower);
     }
     sigma_points(f, f->x, w->lower, w->chi);
@@ -243,7 +244,10 @@ bool tsukf_step(tsukf *f, tsukf_process_fn process, const void *ctx, const adcs_
     /* ---- measurement sigma points ----------------------------------------------------- */
     la_symmetrize(NX, w->px_pred);
     if (robust_cholesky(w->px_pred, w->lower, w->a) != 0) {
+        /* Reset the predicted Pˣ and drop the predicted coupling, so that the bias-free
+         * covariance Pˣ − βPᵇβᵀ is P₀ˣ (positive definite); Pᵇ is kept. */
         diag_matrix(NX, f->px0, w->px_pred);
+        la_zero(NX * NB, w->beta_pred);
         ok = false;
         (void)la_cholesky(NX, w->px_pred, w->lower);
     }

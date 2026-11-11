@@ -294,8 +294,9 @@ impl Tsukf {
 
         // ---- prediction ---------------------------------------------------------------
         if robust_cholesky(&self.px, &mut self.work.lower, &mut self.work.a).is_err() {
-            diag(NX, &self.px0, &mut self.px);
-            ok = false;
+            // Restart Pˣ, Pᵇ and β together: a reset Pˣ with the old β and Pᵇ can leave the
+            // bias-free covariance Pˣ − βPᵇβᵀ indefinite.
+            ok = self.reset_covariance();
             let _ = cholesky(NX, &self.px, &mut self.work.lower);
         }
         let x = self.x;
@@ -346,7 +347,10 @@ impl Tsukf {
         // ---- measurement sigma points -------------------------------------------------
         symmetrize(NX, &mut w.px_pred);
         if robust_cholesky(&w.px_pred, &mut w.lower, &mut w.a).is_err() {
+            // Reset the predicted Pˣ and drop the predicted coupling, so that the bias-free
+            // covariance Pˣ − βPᵇβᵀ is P₀ˣ (positive definite); Pᵇ is kept.
             diag(NX, &self.px0, &mut w.px_pred);
+            w.beta_pred = [0.0; NX * NB];
             ok = false;
             let _ = cholesky(NX, &w.px_pred, &mut w.lower);
         }
@@ -477,5 +481,83 @@ impl Tsukf {
         self.pb = w.pb_upd;
         self.beta = w.beta_upd;
         ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::real::TEST_TOL;
+
+    const ALPHA: Real = 1.0;
+    const W_B: [Real; NB] = [1e-6; NB];
+    const V: [Real; NY] = [1e-3; NY];
+    const PX0: [Real; NX] = [1e-2; NX];
+    const PB0: [Real; NB] = [1e-2; NB];
+    const ALL: [bool; NY] = [true; NY];
+
+    fn y() -> [Real; NY] {
+        let mut y = [0.0; NY];
+        y[3] = 1.0;
+        y[SUN + 2] = 1.0;
+        y[MAG..MAG + 3].copy_from_slice(&[0.3, -0.2, 0.1]);
+        y[W..W + 3].copy_from_slice(&[0.02, -0.01, 0.015]);
+        y
+    }
+
+    /// A filter after a few steps, so that β and Pᵇ are no longer their initial values.
+    fn warmed() -> Tsukf {
+        let mut f = Tsukf::ZERO;
+        f.configure(ALPHA, &[1e-6; NX], &W_B, &V);
+        let mut x0 = [0.0; NX];
+        x0[3] = 1.0;
+        x0[SUN + 2] = 1.0;
+        f.reset(&x0, &PX0, &[0.0; NB], &PB0);
+        for _ in 0..5 {
+            assert!(f.step(|_| {}, &y(), &ALL));
+        }
+        assert!(f.beta.iter().any(|&b| b != 0.0));
+        f
+    }
+
+    fn assert_same(a: &Tsukf, b: &Tsukf) {
+        let pairs: [(&[Real], &[Real]); 4] =
+            [(&a.x, &b.x), (&a.px, &b.px), (&a.b, &b.b), (&a.pb, &b.pb)];
+        for (u, v) in pairs {
+            for (p, q) in u.iter().zip(v) {
+                assert!((p - q).abs() <= TEST_TOL, "{p} vs {q}");
+            }
+        }
+    }
+
+    /// A failed prediction factorisation restarts Pˣ, Pᵇ and β together: the step equals one
+    /// from a filter freshly reset to P₀ with the same estimate.
+    #[test]
+    fn failed_prediction_cholesky_restarts_all_covariances() {
+        let mut a = warmed();
+        let mut b = a.clone();
+        b.reset(&a.x, &PX0, &a.b, &PB0);
+        a.px[0] = -1.0;
+        assert!(!a.step(|_| {}, &y(), &ALL));
+        assert!(b.step(|_| {}, &y(), &ALL));
+        assert_same(&a, &b);
+    }
+
+    /// A failed measurement factorisation resets the predicted Pˣ and drops the predicted β,
+    /// keeping Pᵇ: the step equals one from a filter with Pˣ = P₀ˣ, β = 0, the same Pᵇ and no
+    /// process noise on x (an identity process then predicts exactly that).
+    #[test]
+    fn failed_measurement_cholesky_drops_the_coupling() {
+        let mut a = warmed();
+        let mut b = a.clone();
+        diag(NX, &PX0, &mut b.px);
+        b.beta = [0.0; NX * NB];
+        b.configure(ALPHA, &[0.0; NX], &W_B, &V);
+        let mut w_x = [1e-6; NX];
+        w_x[0] = -1.0; // makes the predicted Pˣ indefinite
+        a.configure(ALPHA, &w_x, &W_B, &V);
+        assert!(!a.step(|_| {}, &y(), &ALL));
+        assert!(b.step(|_| {}, &y(), &ALL));
+        assert_same(&a, &b);
     }
 }
