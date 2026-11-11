@@ -334,7 +334,9 @@ class ScenarioPanel(QTextBrowser):
             for k in (
                 "scenario_name",
                 "backend",
+                "adcs_variant",
                 "seed",
+                "duration_s",
                 "start_utc",
                 "dt_adcs_s",
                 "dt_dynamics_s",

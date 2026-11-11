@@ -81,6 +81,8 @@ uv run adcssim run scenarios/case_1a.toml              # writes runs/case_1a_pyt
 uv run adcssim run scenarios/case_1a.toml --backend none   # open loop, no ADCS
 uv run adcssim run scenarios/case_1a.toml --backend c      # the C library (build it first)
 uv run adcssim run scenarios/case_1a.toml --backend rust   # the Rust library (build it first)
+uv run adcssim run scenarios/case_1a.toml --variant mekf --seed 3   # another algorithm, other noise
+uv run adcssim gui                                     # or choose all this in a window (below)
 uv run python tools/thesis_report.py                   # all cases → docs/results/thesis_cases.md
 ```
 
@@ -103,6 +105,42 @@ Verification: golden vectors recorded from the reference (the C and Rust librari
 to about 10⁻¹⁴), full closed-loop scenarios compared across all three, sanitizers, Miri,
 fuzzing (which found a real overflow bug, fixed in all three), static analysis, and
 bare-metal builds for Cortex-M4F and M7 in CI.
+
+## Launcher
+
+```bash
+uv sync --extra viz
+uv run adcssim gui
+```
+
+![Launcher](docs/images/launcher.png)
+
+One window for choosing a run instead of typing it:
+
+- **Scenario**: every file in `scenarios/` (or any other, with *Browse…*), with its
+  description, duration, start time and defaults.
+- **Implementation**: the Python reference, the C library, the Rust library, or no ADCS
+  (open loop). A library that has not been built is greyed out, with the command that
+  builds it; *Re-check* looks again after building.
+- **Algorithm**: thesis (FLAE + two-stage UKF), improved (error-state UKF) or MEKF.
+- **Run options**: duration and random seed (empty keeps the scenario's), log folder,
+  and the live view's speed.
+- **Advanced ADCS settings**: every `AdcsConfig` setting, grouped by algorithm, editable,
+  with the scenario's value alongside; changed values are shown in bold. Invalid values are
+  rejected with the same rules the C and Rust libraries apply.
+- **Run**: open a live view, run to a log (with progress and *Cancel*), or replay a log;
+  recent logs are listed and open with a double-click.
+
+The window shows the equivalent command line as you edit, so any run can be repeated
+without the GUI. The command line has the same options:
+
+```bash
+uv run adcssim run scenarios/case_1a.toml --backend rust --variant mekf --seed 3 --duration 600
+```
+
+The scenario files are never modified; overrides are recorded in the log's metadata
+(backend, variant, seed, duration) and shown in the viewer's *Scenario* tab. The choices
+made in the launcher are remembered between sessions.
 
 ## Visualization
 

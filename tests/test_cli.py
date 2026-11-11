@@ -45,6 +45,34 @@ def test_run_reports_bad_scenario(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "error" in capsys.readouterr().err
 
 
+def test_run_applies_variant_and_seed(tmp_path: Path) -> None:
+    scenario = str(REPO / "scenarios" / "case_1a.toml")
+    args = ["run", scenario, "--duration", "1", "--out", str(tmp_path), "--quiet"]
+    assert main([*args, "--variant", "mekf", "--seed", "9"]) == 0
+    [log] = tmp_path.glob("*.parquet")
+    meta = Telemetry.read(log).metadata
+    assert (meta["adcs_variant"], meta["seed"]) == ("mekf", "9")
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [(["--duration", "0"], "duration"), (["--seed", "-1"], "seed")],
+)
+def test_run_rejects_invalid_overrides(
+    extra: list[str], message: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scenario = str(REPO / "scenarios" / "case_1a.toml")
+    assert main(["run", scenario, *extra, "--quiet"]) == 2
+    assert message in capsys.readouterr().err
+
+
+def test_run_rejects_unknown_variant(capsys: pytest.CaptureFixture[str]) -> None:
+    scenario = str(REPO / "scenarios" / "case_1a.toml")
+    with pytest.raises(SystemExit):
+        main(["run", scenario, "--variant", "kalman"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_run_rejects_unknown_backend(capsys: pytest.CaptureFixture[str]) -> None:
     scenario = str(REPO / "scenarios" / "case_1a.toml")
     assert main(["run", scenario, "--backend", "quantum", "--quiet"]) == 2

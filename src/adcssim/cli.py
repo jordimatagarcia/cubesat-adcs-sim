@@ -1,20 +1,27 @@
 """Command-line entry point: ``adcssim``."""
 
 import argparse
-import dataclasses
-import math
 import sys
-import time
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from pathlib import Path
 
-import numpy as np
-
 from adcssim import __version__
-from adcssim.backends import create_backend
-from adcssim.runner import Simulation
-from adcssim.scenario import ScenarioError, load_scenario
+from adcssim.backends.config import VARIANTS
+from adcssim.launch import RunRequest, prepare, run_batch
+from adcssim.scenario import ScenarioError
+
+
+def _add_overrides(p: argparse.ArgumentParser, what: str) -> None:
+    p.add_argument("--backend", help=f"ADCS backend{what}, overriding the scenario (e.g. none)")
+    p.add_argument(
+        "--variant",
+        choices=VARIANTS,
+        help="ADCS algorithm variant, overriding the scenario",
+    )
+    p.add_argument("--duration", type=float, help="run length in seconds, overriding the scenario")
+    p.add_argument(
+        "--seed", type=int, help="random seed of the sensor noise, overriding the scenario"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,10 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="run a scenario and write its telemetry log")
     run.add_argument("scenario", type=Path, help="scenario file (.toml)")
-    run.add_argument("--backend", help="ADCS backend, overriding the scenario (e.g. none)")
-    run.add_argument(
-        "--duration", type=float, help="run length in seconds, overriding the scenario"
-    )
+    _add_overrides(run, "")
     run.add_argument(
         "--out", type=Path, default=Path("runs"), help="output directory (default: runs/)"
     )
@@ -40,79 +44,81 @@ def build_parser() -> argparse.ArgumentParser:
         "view", help="open the visualization: a scenario (live) or a .parquet log (replay)"
     )
     view.add_argument("path", type=Path, help="scenario file (.toml) or telemetry log (.parquet)")
-    view.add_argument("--backend", help="ADCS backend for a live scenario (e.g. none)")
+    _add_overrides(view, " for a live scenario")
     view.add_argument(
         "--speed", type=float, default=60.0, help="simulated seconds per second (default: 60)"
     )
     view.add_argument("--paused", action="store_true", help="start paused")
+
+    sub.add_parser(
+        "gui", help="open the launcher: choose a scenario, implementation and run options"
+    )
     return parser
+
+
+def _request(path: Path, args: argparse.Namespace) -> RunRequest:
+    return RunRequest(
+        scenario=path,
+        backend=args.backend,
+        variant=args.variant,
+        duration_s=args.duration,
+        seed=args.seed,
+    )
+
+
+def _error(message: object) -> int:
+    print(f"error: {message}", file=sys.stderr)
+    return 2
 
 
 def _run(args: argparse.Namespace) -> int:
     try:
-        scenario = load_scenario(args.scenario)
-    except (OSError, ScenarioError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if args.duration is not None:
-        if args.duration <= 0:
-            print("error: --duration must be positive", file=sys.stderr)
-            return 2
-        scenario = dataclasses.replace(scenario, duration_s=args.duration)
-    try:
-        backend = create_backend(args.backend or scenario.backend)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-    sim = Simulation(scenario, backend)
+        scenario = prepare(_request(args.scenario, args))
+    except (ScenarioError, ValueError) as exc:
+        return _error(exc)
     report_every = max(1, scenario.steps // 20)
 
     def progress(k: int, n: int) -> None:
         if not args.quiet and (k % report_every == 0 or k == n):
             print(f"\r  {k}/{n} steps ({100 * k / n:.0f}%)", end="", flush=True)
 
-    tic = time.perf_counter()
-    telemetry = sim.run(progress)
-    wall = time.perf_counter() - tic
+    try:
+        result = run_batch(scenario, args.out, progress)
+    except ValueError as exc:  # e.g. a native library that is not built
+        return _error(exc)
     if not args.quiet:
         print()
-
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = args.out / f"{scenario.name}_{backend.name}_{stamp}.parquet"
-    telemetry.write(out)
-
-    eclipse = telemetry.get("eclipse").astype(bool)
-    rate = np.degrees(np.linalg.norm(telemetry.get("w_true"), axis=1))
-    print(f"scenario   {scenario.name} ({backend.name})")
-    print(f"simulated  {scenario.duration_s:.0f} s in {wall:.1f} s wall time")
-    print(f"eclipse    {100 * eclipse.mean():.1f}% of the run")
-    print(f"body rate  {rate[0]:.2f} °/s at start, {rate[-1]:.2f} °/s at end")
-    error = telemetry.get("attitude_error")
-    if np.any(np.isfinite(error)):
-        print(f"att. error {math.degrees(float(np.nanmedian(error))):.3f}° median")
-    print(f"log        {out}")
+    print("\n".join(result.summary()))
     return 0
+
+
+_VIZ_MISSING = (
+    "the {what} needs the optional 'viz' dependencies ({name} is missing).\n"
+    "Install them with:  uv sync --extra viz"
+)
 
 
 def _view(args: argparse.Namespace) -> int:
     try:
         from adcssim.viz.app import run_viewer
     except ImportError as exc:
-        print(
-            f"error: the viewer needs the optional 'viz' dependencies ({exc.name} is missing).\n"
-            "Install them with:  uv sync --extra viz",
-            file=sys.stderr,
-        )
-        return 2
+        return _error(_VIZ_MISSING.format(what="viewer", name=exc.name))
     if not args.path.exists():
-        print(f"error: {args.path} does not exist", file=sys.stderr)
-        return 2
+        return _error(f"{args.path} does not exist")
     try:
-        return run_viewer(args.path, args.backend, args.speed, autoplay=not args.paused)
+        return run_viewer(
+            args.path, None, args.speed, autoplay=not args.paused, request=_request(args.path, args)
+        )
     except (ScenarioError, ValueError, KeyError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return _error(exc)
+
+
+def _gui(_args: argparse.Namespace) -> int:
+    try:
+        from adcssim.viz.launcher import run_launcher
+    except ImportError as exc:
+        return _error(_VIZ_MISSING.format(what="launcher", name=exc.name))
+    return run_launcher()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -122,5 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     if args.command == "view":
         return _view(args)
+    if args.command == "gui":
+        return _gui(args)
     parser.print_help()
     return 0

@@ -2,6 +2,7 @@
 
 import math
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from adcssim.launch import RunRequest, prepare
+from adcssim.telemetry import Telemetry
 from adcssim.viz.groundtrack import GroundTrack
 from adcssim.viz.history import History
 from adcssim.viz.panels import AdcsPanel, ScenarioPanel, SensorsPanel
@@ -251,23 +254,34 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def open_source(path: Path, backend: str | None, speed: float) -> tuple[Source, str]:
-    """A replay source for ``.parquet`` logs, a live simulation for ``.toml`` scenarios."""
-    from adcssim.scenario import load_scenario
-    from adcssim.telemetry import Telemetry
-
+def open_source(
+    path: Path, backend: str | None, speed: float, request: RunRequest | None = None
+) -> tuple[Source, str]:
+    """A replay source for ``.parquet`` logs, a live simulation for ``.toml`` scenarios.
+    ``request`` carries the overrides (variant, seed, …) for a scenario; ``backend``, when
+    given, takes precedence over the request's."""
     if path.suffix == ".parquet":
         return ReplaySource(Telemetry.read(path), speed), f"replay of {path.name}"
-    scenario = load_scenario(path)
+    request = replace(request or RunRequest(path), scenario=path)
+    if backend is not None:
+        request = replace(request, backend=backend)
+    scenario = prepare(request)
     return (
-        LiveSource(scenario, backend, speed),
-        f"{scenario.name} (live)",
+        LiveSource(scenario, None, speed),
+        f"{scenario.name} ({scenario.backend}, {scenario.adcs.variant}, live)",
     )
 
 
-def run_viewer(path: Path, backend: str | None, speed: float, autoplay: bool) -> int:
-    app = QApplication.instance() or QApplication(sys.argv)
-    source, title = open_source(path, backend, speed)
+def open_viewer(
+    path: Path,
+    speed: float,
+    autoplay: bool,
+    request: RunRequest | None = None,
+    backend: str | None = None,
+) -> MainWindow:
+    """Open a viewer window (the application must exist). Used by ``adcssim view`` and by
+    the launcher, which keeps running while viewers are open."""
+    source, title = open_source(path, backend, speed, request)
     window = MainWindow(source, title)
     if math.isinf(speed):
         index = len(SPEEDS) - 1
@@ -277,4 +291,16 @@ def run_viewer(path: Path, backend: str | None, speed: float, autoplay: bool) ->
     window.show()
     if autoplay:
         window.toggle_play()
+    return window
+
+
+def run_viewer(
+    path: Path,
+    backend: str | None,
+    speed: float,
+    autoplay: bool,
+    request: RunRequest | None = None,
+) -> int:
+    app = QApplication.instance() or QApplication(sys.argv)
+    _window = open_viewer(path, speed, autoplay, request, backend)
     return int(app.exec())
